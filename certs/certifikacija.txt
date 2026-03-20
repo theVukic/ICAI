@@ -1,0 +1,37 @@
+$cert = New-SelfSignedCertificate `
+  -Type CodeSigningCert `
+  -Subject "CN=MyApp Test Code Signing" `
+  -CertStoreLocation "Cert:\CurrentUser\My" `
+  -HashAlgorithm "SHA256" `
+  -KeyAlgorithm "RSA" `
+  -KeyLength 2048
+
+$cert
+
+otvori certmgr.msc
+
+idi na Personal > Certificates
+
+nađi MyApp Test Code Signing
+
+exportuj i .cer ako želiš javni dio
+
+importuj taj certifikat u:
+
+Trusted Root Certification Authorities
+
+po potrebi i Trusted Publishers
+
+Za druge računare moraćeš isto ručno importovati certifikat da bi sistem vjerovao potpisu. Microsoft navodi da self-signed certifikat nije trusted dok se chain/root ne instalira kao trusted na uređaju.
+
+
+--------------------------------------------------------------------------
+
+export pfx
+
+$pwd = ConvertTo-SecureString "TvojaJakaLozinka123!" -AsPlainText -Force
+
+Export-PfxCertificate `
+  -Cert "Cert:\CurrentUser\My\<THUMBPRINT>" `
+  -FilePath ".\certs\myapp-codesign.pfx" `
+  -Password $pwd
