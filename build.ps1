@@ -16,12 +16,10 @@ $rootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $frontendDir = Join-Path $rootDir "frontend"
 $backendDir = Join-Path $rootDir "backend"
 $appDir = Join-Path $rootDir "app"
-$backendDistDir = Join-Path $backendDir "dist"
 $appDistDir = Join-Path $appDir "dist"
 $appExePath = Join-Path $appDir "app.exe"
 $certPath = Join-Path $rootDir "certs\ICAIcert.pfx"
 
-# PROMIJENI OVO
 $certPassword = "snayrexkrmak2002"
 
 $signtool = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe"
@@ -50,50 +48,36 @@ try {
         New-Item -ItemType Directory -Path $appDir | Out-Null
     }
 
-    Log "Building frontend"
-    Push-Location $frontendDir
+    Log "Cleaning old app/dist"
+    if (Test-Path $appDistDir) {
+        Remove-Item -Recurse -Force $appDistDir
+    }
 
+    Log "Building frontend directly into app/dist"
+    Push-Location $frontendDir
     npm run build
     if ($LASTEXITCODE -ne 0) {
         throw "Frontend build failed"
     }
-
     Pop-Location
     Success "Frontend build completed"
 
-    $frontendDistDir = Join-Path $frontendDir "dist"
-    if (!(Test-Path $frontendDistDir)) {
-        throw "frontend/dist does not exist after build"
+    if (!(Test-Path $appDistDir)) {
+        throw "app/dist does not exist after build"
     }
-
-    Log "Preparing backend/dist for Go embed"
-    if (Test-Path $backendDistDir) {
-        Remove-Item -Recurse -Force $backendDistDir
-    }
-    New-Item -ItemType Directory -Path $backendDistDir | Out-Null
-
-    Log "Copying frontend/dist to backend/dist"
-    Copy-Item -Recurse "$frontendDistDir\*" $backendDistDir
-    Success "backend/dist prepared"
-
-    Log "Preparing app/dist output"
-    if (Test-Path $appDistDir) {
-        Remove-Item -Recurse -Force $appDistDir
-    }
-    New-Item -ItemType Directory -Path $appDistDir | Out-Null
-
-    Log "Copying frontend/dist to app/dist"
-    Copy-Item -Recurse "$frontendDistDir\*" $appDistDir
     Success "app/dist prepared"
+
+    Log "Removing old app.exe if it exists"
+    if (Test-Path $appExePath) {
+        Remove-Item -Force $appExePath
+    }
 
     Log "Building Go executable to app/app.exe"
     Push-Location $backendDir
-
     go build -ldflags="-s -w" -o $appExePath
     if ($LASTEXITCODE -ne 0) {
         throw "Go build failed"
     }
-
     Pop-Location
     Success "Executable built: $appExePath"
 
@@ -115,6 +99,6 @@ try {
     Log "Final output folder: $appDir"
 }
 catch {
-    ErrorMsg $_
+    ErrorMsg $_.Exception.Message
     exit 1
 }

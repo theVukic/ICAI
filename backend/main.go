@@ -1,19 +1,16 @@
 package main
 
 import (
-	"embed"
 	"encoding/json"
-	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 )
-
-//go:embed all:dist
-var distFS embed.FS
 
 type MessageResponse struct {
 	Message string `json:"message"`
@@ -37,6 +34,18 @@ func openBrowser(url string) {
 }
 
 func main() {
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	exeDir := filepath.Dir(exePath)
+	distDir := filepath.Join(exeDir, "dist")
+
+	if _, err := os.Stat(distDir); os.IsNotExist(err) {
+		log.Fatalf("dist folder nije pronađen: %s", distDir)
+	}
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
@@ -46,28 +55,23 @@ func main() {
 		})
 	})
 
-	dist, err := fs.Sub(distFS, "dist")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fileServer := http.FileServer(http.FS(dist))
+	fileServer := http.FileServer(http.Dir(distDir))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
 
 		if path == "" {
-			http.ServeFileFS(w, r, dist, "index.html")
+			http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
 			return
 		}
 
-		_, err := fs.Stat(dist, path)
-		if err == nil {
+		fullPath := filepath.Join(distDir, filepath.Clean(path))
+		if _, err := os.Stat(fullPath); err == nil {
 			fileServer.ServeHTTP(w, r)
 			return
 		}
 
-		http.ServeFileFS(w, r, dist, "index.html")
+		http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
 	})
 
 	go func() {

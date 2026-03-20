@@ -1,6 +1,9 @@
 import { defineConfig } from "vite";
+import path from "path";
 
 export default defineConfig({
+  base: "./",
+
   server: {
     proxy: {
       "/api": {
@@ -8,5 +11,10 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+  },
+
+  build: {
+    outDir: path.resolve(__dirname, "../app/dist"),
+    emptyOutDir: true,
   },
 });
