@@ -10,7 +10,7 @@ app.innerHTML = `
 
     <button id="testBtn">Klikni me</button>
 
-    <p id="result">Klikni dugme...</p>
+    <p id="result">Klikni dugme!</p>
   </div>
 `;
 
