@@ -36,6 +36,12 @@ input {
 button {
     border: 0;
     cursor: pointer;
+    transition:
+        transform 180ms ease,
+        background-color 180ms ease,
+        border-color 180ms ease,
+        box-shadow 180ms ease,
+        opacity 180ms ease;
 }
 
 .shell {
@@ -75,6 +81,11 @@ button {
     display: flex;
     align-items: center;
     gap: 14px;
+    transition: transform 180ms ease, opacity 180ms ease;
+}
+
+.logo-wrap:hover {
+    transform: translateY(-1px);
 }
 
 .logo-mark {
@@ -110,6 +121,16 @@ button {
     background: linear-gradient(135deg, var(--blue), var(--blue-strong));
     color: white;
     white-space: nowrap;
+}
+
+.primary-button:hover,
+.publish-button:hover,
+.danger-button:hover,
+.drop-inline-button:hover,
+.drop-simple-button:hover,
+.icon-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
 }
 
 .button-icon {
@@ -162,6 +183,7 @@ button {
     display: flex;
     flex-direction: column;
     align-items: stretch;
+    transition: outline-color 180ms ease, outline-offset 180ms ease;
 }
 
 .drop-layer.dragging {
@@ -176,7 +198,9 @@ button {
     align-content: center;
     gap: 14px;
     text-align: center;
-    transition: transform 160ms ease;
+    transition:
+        transform 220ms ease,
+        opacity 220ms ease;
 }
 
 .drop-simple-button {
@@ -257,12 +281,24 @@ button {
     -webkit-backdrop-filter: blur(14px);
     display: grid;
     grid-template-rows: 210px 1fr;
+    transition:
+        transform 220ms ease,
+        box-shadow 220ms ease,
+        border-color 220ms ease;
+    will-change: transform;
+}
+
+.product-card:hover {
+    transform: translateY(-6px) scale(1.01);
+    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.18);
+    border-color: rgba(255, 255, 255, 0.14);
 }
 
 .product-media {
     position: relative;
     height: 210px;
     background: linear-gradient(180deg, #20252b 0%, #15191d 100%);
+    overflow: hidden;
 }
 
 .product-media img,
@@ -274,6 +310,12 @@ button {
 .product-media img {
     display: block;
     object-fit: cover;
+    transition: transform 260ms ease, filter 260ms ease;
+}
+
+.product-card:hover .product-media img {
+    transform: scale(1.03);
+    filter: saturate(1.03);
 }
 
 .product-placeholder {
@@ -300,6 +342,12 @@ button {
     transform: translateY(-50%);
     line-height: 1;
     text-align: center;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+        opacity 180ms ease,
+        transform 180ms ease,
+        background-color 180ms ease;
 }
 
 .image-arrow svg {
@@ -318,10 +366,28 @@ button {
 
 .image-arrow.left {
     left: 10px;
+    transform: translateY(-50%) translateX(-4px);
 }
 
 .image-arrow.right {
     right: 10px;
+    transform: translateY(-50%) translateX(4px);
+}
+
+.product-media:hover .image-arrow,
+.product-media:focus-within .image-arrow {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.product-media:hover .image-arrow.left,
+.product-media:focus-within .image-arrow.left {
+    transform: translateY(-50%) translateX(0);
+}
+
+.product-media:hover .image-arrow.right,
+.product-media:focus-within .image-arrow.right {
+    transform: translateY(-50%) translateX(0);
 }
 
 .image-count {
@@ -335,6 +401,7 @@ button {
     font-size: 0.78rem;
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
+    transition: opacity 180ms ease, transform 180ms ease;
 }
 
 .product-body {
