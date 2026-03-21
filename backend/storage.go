@@ -131,16 +131,25 @@ func (s *CatalogStore) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := os.RemoveAll(s.tempDir); err != nil {
-		return fmt.Errorf("nije moguće obrisati temp folder: %w", err)
-	}
-
-	tempDir, err := os.MkdirTemp("", "icaiapp-catalogs-*")
+	entries, err := os.ReadDir(s.tempDir)
 	if err != nil {
-		return fmt.Errorf("nije moguće ponovo kreirati temp folder: %w", err)
+		if os.IsNotExist(err) {
+			if mkdirErr := os.MkdirAll(s.tempDir, 0o755); mkdirErr != nil {
+				return fmt.Errorf("nije moguće ponovo kreirati temp folder: %w", mkdirErr)
+			}
+			s.catalogs = []UploadedCatalog{}
+			return nil
+		}
+		return fmt.Errorf("nije moguće pročitati temp folder: %w", err)
 	}
 
-	s.tempDir = tempDir
+	for _, entry := range entries {
+		entryPath := filepath.Join(s.tempDir, entry.Name())
+		if removeErr := os.RemoveAll(entryPath); removeErr != nil {
+			return fmt.Errorf("nije moguće obrisati sadržaj temp foldera: %w", removeErr)
+		}
+	}
+
 	s.catalogs = []UploadedCatalog{}
 	return nil
 }
