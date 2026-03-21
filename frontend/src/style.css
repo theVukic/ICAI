@@ -21,11 +21,25 @@ body,
     min-height: 100%;
 }
 
+html {
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    scrollbar-width: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
 body {
     margin: 0;
     background: #14181c;
     color: var(--text);
     font-family: "Segoe UI Variable Text", "Bahnschrift", sans-serif;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
 }
 
 button,
@@ -133,6 +147,10 @@ button {
     transform: translateY(-8px);
 }
 
+.action-label-toggle {
+    transform: translateY(-8px);
+}
+
 .logo-wrap:hover {
     transform: translateY(-1px);
 }
@@ -220,13 +238,9 @@ button {
 .view-toggle-button .button-icon svg {
     width: 42px;
     height: 42px;
-    margin: 0;
+    margin: 0 auto;
     justify-self: center;
     align-self: center;
-}
-
-.header-actions .toolbar-action:first-child .action-label {
-    transform: translateY(-8px);
 }
 
 .button-icon path {
@@ -297,6 +311,12 @@ button {
     color: rgba(255, 255, 255, 0.78);
     line-height: 1;
     text-align: center;
+    transition:
+        transform 180ms ease,
+        opacity 180ms ease,
+        filter 180ms ease,
+        border-color 180ms ease,
+        background-color 180ms ease;
 }
 
 .drop-simple-button .button-icon {
@@ -312,6 +332,14 @@ button {
 
 .drop-simple-button .button-icon path {
     stroke-width: 1.7;
+}
+
+.drop-simple-button:hover {
+    transform: scale(1.06);
+    opacity: 0.92;
+    filter: brightness(1.08);
+    border-color: rgba(255, 255, 255, 0.24);
+    background: rgba(255, 255, 255, 0.05);
 }
 
 .center-button-icon {

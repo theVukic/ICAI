@@ -76,7 +76,7 @@ const state: {
   message: "Prevuci JSON fajl ili klikni na Dodaj jos.",
   messageTone: "muted",
   imageIndexes: {},
-  viewMode: "list",
+  viewMode: "grid",
 };
 
 const plusIcon = `
@@ -229,14 +229,14 @@ function render(): void {
         <div class="header-actions">
         <div class="toolbar-action">
           <button class="view-toggle-button" id="viewToggleButton" type="button" aria-label="${
-            state.viewMode === "grid" ? "Prikazi listu" : "Prikazi kartice"
+            state.viewMode === "grid" ? "Prebaci na listu" : "Prebaci na kartice"
           }">
-            <span class="button-icon">${
-              state.viewMode === "grid" ? listViewIcon : gridViewIcon
+            <span class="button-icon view-toggle-icon">${
+              state.viewMode === "grid" ? gridViewIcon : listViewIcon
             }</span>
           </button>
-          <span class="action-label">${
-            state.viewMode === "grid" ? "LISTA" : "KARTICA"
+          <span class="action-label action-label-toggle">${
+            state.viewMode === "grid" ? "KARTICE" : "LISTA"
           }</span>
         </div>
         <div class="toolbar-action">
