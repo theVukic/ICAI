@@ -146,7 +146,7 @@ function render(): void {
           <div class="product-media">
             ${
               image
-                ? `<img src="${image}" alt="${escapeHtml(item.nameB2B)}" loading="lazy" />`
+                ? `<img src="${image}" alt="${escapeHtml(item.nameB2B)}" loading="lazy" draggable="false" />`
                 : `<div class="product-placeholder">Nema slike</div>`
             }
             ${
