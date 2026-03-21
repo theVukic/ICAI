@@ -61,6 +61,7 @@ const state: {
   message: string;
   messageTone: "muted" | "success" | "danger";
   imageIndexes: Record<string, number>;
+  viewMode: "grid" | "list";
 } = {
   data: {
     catalogs: [],
@@ -75,6 +76,7 @@ const state: {
   message: "Prevuci JSON fajl ili klikni na Dodaj jos.",
   messageTone: "muted",
   imageIndexes: {},
+  viewMode: "list",
 };
 
 const plusIcon = `
@@ -102,6 +104,28 @@ const publishIcon = `
   <svg viewBox="0 0 800 800" aria-hidden="true">
     <path d="m548.62 265.07c-8.5703-13.957-23.766-22.477-40.145-22.512h-216.95c-16.383.035156-31.574 8.5547-40.148 22.512l-64.551 103.44c-4.7422 7.543-7.2539 16.277-7.2422 25.188v116.51c0 12.527 4.9766 24.539 13.832 33.398 8.8594 8.8555 20.875 13.832 33.398 13.832h346.37c12.527 0 24.539-4.9766 33.398-13.832 8.8555-8.8594 13.832-20.871 13.832-33.398v-116.51c.011719-8.9102-2.5-17.645-7.2422-25.188zm-46.285 103.44c-10.441 0-20.453 4.1445-27.832 11.527-7.3828 7.3828-11.527 17.391-11.527 27.832 0 2.0859-.83203 4.0898-2.3086 5.5664-1.4766 1.4766-3.4766 2.3047-5.5664 2.3047h-110.21c-4.3477 0-7.8711-3.5234-7.8711-7.8711 0-10.441-4.1484-20.449-11.531-27.832-7.3789-7.3828-17.391-11.527-27.828-11.527h-73.84l54.316-86.75c2.8047-4.7344 7.8789-7.6602 13.383-7.7148h216.95c5.4375-.011719 10.496 2.7852 13.383 7.3984l54.316 87.066z" />
     <path d="m388.82 294.67-47.23 47.23 22.355 22.355 20.309-20.465v56.207h31.488V343.79l20.309 20.469 22.355-22.355-47.23-47.23c-2.957-2.9805-6.9805-4.6562-11.176-4.6562-4.1992 0-8.2227 1.6758-11.18 4.6562z" />
+  </svg>
+`;
+
+const listViewIcon = `
+  <svg viewBox="144 144 512 512" aria-hidden="true">
+    <path d="M576.84 224.17H358.19c-22.168 0-40.305 18.137-40.305 40.305 0 22.168 18.137 40.305 40.305 40.305h218.65c22.168 0 40.305-18.137 40.305-40.305s-18.137-40.305-40.305-40.305z"/>
+    <path d="M576.84 360.2H358.19c-22.168 0-40.305 18.137-40.305 40.305s18.137 40.305 40.305 40.305h218.65c22.168 0 40.305-18.137 40.305-40.305S599.008 360.2 576.84 360.2z"/>
+    <path d="M263.97 400.5c0 22.258-18.043 40.305-40.305 40.305-22.258 0-40.305-18.047-40.305-40.305 0-22.262 18.047-40.305 40.305-40.305 22.262 0 40.305 18.043 40.305 40.305"/>
+    <path d="M263.97 264.47c0 22.262-18.043 40.305-40.305 40.305-22.258 0-40.305-18.043-40.305-40.305 0-22.258 18.047-40.305 40.305-40.305 22.262 0 40.305 18.047 40.305 40.305"/>
+    <path d="M576.84 496.23H358.19c-22.168 0-40.305 18.137-40.305 40.305s18.137 40.305 40.305 40.305h218.65c22.168 0 40.305-18.137 40.305-40.305s-18.137-40.305-40.305-40.305z"/>
+    <path d="M263.97 536.53c0 22.258-18.043 40.305-40.305 40.305-22.258 0-40.305-18.047-40.305-40.305 0-22.262 18.047-40.305 40.305-40.305 22.262 0 40.305 18.043 40.305 40.305"/>
+  </svg>
+`;
+
+const gridViewIcon = `
+  <svg viewBox="0 0 52 52" aria-hidden="true">
+    <path d="M14.5 4h-9C4.7 4 4 4.7 4 5.5v17C4 23.3 4.7 24 5.5 24h9c.8 0 1.5-.7 1.5-1.5v-17C16 4.7 15.3 4 14.5 4z"/>
+    <path d="M30.5 4h-9C20.7 4 20 4.7 20 5.5v17c0 .8.7 1.5 1.5 1.5h9c.8 0 1.5-.7 1.5-1.5v-17C32 4.7 31.3 4 30.5 4z"/>
+    <path d="M46.5 4h-9C36.7 4 36 4.7 36 5.5v17c0 .8.7 1.5 1.5 1.5h9c.8 0 1.5-.7 1.5-1.5v-17C48 4.7 47.3 4 46.5 4z"/>
+    <path d="M14.5 28h-9C4.7 28 4 28.7 4 29.5v17C4 47.3 4.7 48 5.5 48h9c.8 0 1.5-.7 1.5-1.5v-17C16 28.7 15.3 28 14.5 28z"/>
+    <path d="M30.5 28h-9c-.8 0-1.5.7-1.5 1.5v17c0 .8.7 1.5 1.5 1.5h9c.8 0 1.5-.7 1.5-1.5v-17C32 28.7 31.3 28 30.5 28z"/>
+    <path d="M46.5 28h-9c-.8 0-1.5.7-1.5 1.5v17c0 .8.7 1.5 1.5 1.5h9c.8 0 1.5-.7 1.5-1.5v-17C48 28.7 47.3 28 46.5 28z"/>
   </svg>
 `;
 
@@ -142,7 +166,7 @@ function render(): void {
           : "Na upit";
 
       return `
-        <article class="product-card">
+        <article class="product-card ${state.viewMode === "list" ? "list-mode" : ""}">
           <div class="product-media">
             ${
               image
@@ -202,6 +226,19 @@ function render(): void {
           <div class="logo-mark">IC</div>
           <strong>ICAI</strong>
         </div>
+        <div class="header-actions">
+        <div class="toolbar-action">
+          <button class="view-toggle-button" id="viewToggleButton" type="button" aria-label="${
+            state.viewMode === "grid" ? "Prikazi listu" : "Prikazi kartice"
+          }">
+            <span class="button-icon">${
+              state.viewMode === "grid" ? listViewIcon : gridViewIcon
+            }</span>
+          </button>
+          <span class="action-label">${
+            state.viewMode === "grid" ? "LISTA" : "KARTICA"
+          }</span>
+        </div>
         <div class="toolbar-action">
           <button class="primary-button" id="uploadButton" ${
             state.isUploading ? "disabled" : ""
@@ -209,6 +246,7 @@ function render(): void {
             <span class="button-icon">${plusIcon}</span>
           </button>
           <span class="action-label action-label-upload">DODAJ</span>
+        </div>
         </div>
       </header>
 
@@ -219,7 +257,7 @@ function render(): void {
         ${
           hasItems
             ? `
-              <section class="products-grid">
+              <section class="products-grid ${state.viewMode === "list" ? "list-view" : ""}">
                 ${cards}
               </section>
             `
@@ -272,6 +310,8 @@ function bindEvents(): void {
   const fileInput = document.querySelector<HTMLInputElement>("#fileInput");
   const uploadButton =
     document.querySelector<HTMLButtonElement>("#uploadButton");
+  const viewToggleButton =
+    document.querySelector<HTMLButtonElement>("#viewToggleButton");
   const browseButton =
     document.querySelector<HTMLButtonElement>("#browseButton");
   const dropZone = document.querySelector<HTMLElement>("#dropZone");
@@ -285,6 +325,10 @@ function bindEvents(): void {
 
   const openPicker = () => fileInput.click();
   uploadButton.addEventListener("click", openPicker);
+  viewToggleButton?.addEventListener("click", () => {
+    state.viewMode = state.viewMode === "grid" ? "list" : "grid";
+    render();
+  });
   browseButton?.addEventListener("click", openPicker);
 
   fileInput.addEventListener("change", async () => {
