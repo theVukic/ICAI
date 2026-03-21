@@ -78,8 +78,30 @@ const state: {
 };
 
 const plusIcon = `
-  <svg viewBox="0 0 20 20" aria-hidden="true">
-    <path d="M10 4.5v11M4.5 10h11" />
+  <svg viewBox="0 0 800 800" aria-hidden="true">
+    <path d="m400 179.58c-121.23 0-220.42 99.188-220.42 220.42S278.768 620.42 400 620.42 620.42 521.232 620.42 400 521.232 179.58 400 179.58zm110.21 236.16h-94.465v94.465c0 8.6602-7.0859 15.742-15.742 15.742-8.6602 0-15.742-7.0859-15.742-15.742V415.74h-94.465c-8.6602 0-15.742-7.0859-15.742-15.742 0-8.6602 7.0859-15.742 15.742-15.742h94.465v-94.465c0-8.6602 7.0859-15.742 15.742-15.742 8.6602 0 15.742 7.0859 15.742 15.742v94.465h94.465c8.6602 0 15.742 7.0859 15.742 15.742 0 8.6602-7.0859 15.742-15.742 15.742z" />
+  </svg>
+`;
+
+const centerPlusIcon = `
+  <svg viewBox="0 0 800 800" aria-hidden="true">
+    <path d="m398.89 203.36c-5.1875.57031-9.0859 5.0117-8.9727 10.234v176.33h-176.33c-.31641-.015625-.62891-.015625-.94531 0-2.6719.125-5.1875 1.3086-6.9883 3.2852-1.8008 1.9766-2.7422 4.5898-2.6172 7.2656.125 2.6719 1.3086 5.1836 3.2852 6.9844 1.9805 1.8008 4.5938 2.7422 7.2656 2.6172h176.33v176.33c-.039063 2.6992 1.0078 5.2969 2.9023 7.2188 1.8906 1.9219 4.4766 3.0039 7.1758 3.0039 2.6953 0 5.2812-1.082 7.1758-3.0039 1.8906-1.9219 2.9375-4.5195 2.8984-7.2188v-176.33h176.33c2.6992.039062 5.2969-1.0078 7.2188-2.8984 1.9219-1.8945 3.0039-4.4805 3.0039-7.1758 0-2.6992-1.082-5.2852-3.0039-7.1758-1.9219-1.8945-4.5195-2.9414-7.2188-2.9023h-176.33v-176.33c.0625-2.9023-1.1289-5.6914-3.2695-7.6523-2.1406-1.957-5.0234-2.8984-7.9102-2.582z" />
+  </svg>
+`;
+
+const deleteIcon = `
+  <svg viewBox="0 0 800 800" aria-hidden="true">
+    <path d="m366.45 387.96h9.3203v92.449H366.45z" />
+    <path d="m424.28 387.96h9.3203v92.449H424.28z" />
+    <path d="m395.36 387.96h9.3203v92.449H395.36z" />
+    <path d="m545.3 208.55H254.7c-12.238 0-23.977 4.8633-32.633 13.516-8.6523 8.6562-13.516 20.395-13.516 32.633v290.6c0 12.238 4.8633 23.977 13.516 32.633 8.6562 8.6562 20.395 13.516 32.633 13.516h290.6c12.238 0 23.977-4.8594 32.633-13.516s13.516-20.395 13.516-32.633v-290.6c0-12.238-4.8594-23.977-13.516-32.633-8.6562-8.6523-20.395-13.516-32.633-13.516zm-176.33 97.539c0-7.5703 6.1328-13.703 13.703-13.703h34.562c3.6328 0 7.1172 1.4414 9.6875 4.0117 2.5703 2.5703 4.0156 6.0547 4.0156 9.6914v13.301h-61.918zm84.641 183.44c-.51562 4.9766-2.8633 9.5859-6.5859 12.93-3.7266 3.3438-8.5625 5.1797-13.566 5.1562h-66.906c-5.0078.023438-9.8438-1.8125-13.566-5.1562-3.7266-3.3438-6.0742-7.9531-6.5859-12.93l-13.957-121.72h135.12zm30.23-133.71c-1.7109 1.7461-4.0547 2.7305-6.5 2.7227h-154.92c-2.4375 0-4.7773-.97266-6.5-2.7031s-2.6797-4.0781-2.668-6.5156c-.027344-5.5156 2.1523-10.809 6.0508-14.707 3.8984-3.8984 9.1914-6.0781 14.707-6.0508h132.05c5.4961.011718 10.766 2.207 14.645 6.0977 3.8828 3.8906 6.0625 9.1641 6.0625 14.66.015625 2.4336-.94531 4.7734-2.668 6.4961z" />
+  </svg>
+`;
+
+const publishIcon = `
+  <svg viewBox="0 0 800 800" aria-hidden="true">
+    <path d="m548.62 265.07c-8.5703-13.957-23.766-22.477-40.145-22.512h-216.95c-16.383.035156-31.574 8.5547-40.148 22.512l-64.551 103.44c-4.7422 7.543-7.2539 16.277-7.2422 25.188v116.51c0 12.527 4.9766 24.539 13.832 33.398 8.8594 8.8555 20.875 13.832 33.398 13.832h346.37c12.527 0 24.539-4.9766 33.398-13.832 8.8555-8.8594 13.832-20.871 13.832-33.398v-116.51c.011719-8.9102-2.5-17.645-7.2422-25.188zm-46.285 103.44c-10.441 0-20.453 4.1445-27.832 11.527-7.3828 7.3828-11.527 17.391-11.527 27.832 0 2.0859-.83203 4.0898-2.3086 5.5664-1.4766 1.4766-3.4766 2.3047-5.5664 2.3047h-110.21c-4.3477 0-7.8711-3.5234-7.8711-7.8711 0-10.441-4.1484-20.449-11.531-27.832-7.3789-7.3828-17.391-11.527-27.828-11.527h-73.84l54.316-86.75c2.8047-4.7344 7.8789-7.6602 13.383-7.7148h216.95c5.4375-.011719 10.496 2.7852 13.383 7.3984l54.316 87.066z" />
+    <path d="m388.82 294.67-47.23 47.23 22.355 22.355 20.309-20.465v56.207h31.488V343.79l20.309 20.469 22.355-22.355-47.23-47.23c-2.957-2.9805-6.9805-4.6562-11.176-4.6562-4.1992 0-8.2227 1.6758-11.18 4.6562z" />
   </svg>
 `;
 
@@ -180,15 +202,17 @@ function render(): void {
           <div class="logo-mark">IC</div>
           <strong>ICAI</strong>
         </div>
-        <button class="primary-button" id="uploadButton" ${
-          state.isUploading ? "disabled" : ""
-        }>
-          <span class="button-icon">${plusIcon}</span>
-          Dodaj jos
-        </button>
+        <div class="toolbar-action">
+          <button class="primary-button" id="uploadButton" ${
+            state.isUploading ? "disabled" : ""
+          }>
+            <span class="button-icon">${plusIcon}</span>
+          </button>
+          <span class="action-label action-label-upload">DODAJ</span>
+        </div>
       </header>
 
-      <main class="main-layout">
+      <main class="main-layout ${hasItems ? "has-items" : "is-empty"}">
         <section class="drop-layer ${state.isDragging ? "dragging" : ""}" id="dropZone">
         <input id="fileInput" type="file" accept=".json,application/json" multiple hidden />
 
@@ -204,10 +228,8 @@ function render(): void {
                 <button class="drop-simple-button" id="browseButton" ${
                   state.isUploading ? "disabled" : ""
                 }>
-                  <span class="button-icon">${plusIcon}</span>
+                  <span class="button-icon center-button-icon">${centerPlusIcon}</span>
                 </button>
-                <h1>UBACI ARTIKLE</h1>
-                <p class="${state.messageTone}">${escapeHtml(state.message)}</p>
               </section>
             `
         }
@@ -218,7 +240,7 @@ function render(): void {
               <section class="drop-inline">
                 <button class="drop-inline-button" id="browseButton" ${
                   state.isUploading ? "disabled" : ""
-                }><span class="button-icon">${plusIcon}</span>Dodaj jos</button>
+                }><span class="button-icon">${plusIcon}</span></button>
               </section>
             `
             : ""
@@ -227,8 +249,18 @@ function render(): void {
       </main>
 
       <footer class="footer-bar">
-        <button class="danger-button" id="clearButton">Obrisi</button>
-        <button class="publish-button" type="button">Objavi</button>
+        <div class="toolbar-action">
+          <button class="danger-button" id="clearButton">
+            <span class="button-icon">${deleteIcon}</span>
+          </button>
+          <span class="action-label">OBRISI</span>
+        </div>
+        <div class="toolbar-action">
+          <button class="publish-button" type="button">
+            <span class="button-icon">${publishIcon}</span>
+          </button>
+          <span class="action-label">OBJAVI</span>
+        </div>
       </footer>
     </div>
   `;

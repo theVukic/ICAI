@@ -59,7 +59,7 @@ button {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 max(24px, calc((100vw - 1240px) / 2 + 24px));
+    padding: 0 max(24px, calc((100% - 1240px) / 2 + 24px));
     background: #171b20;
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 8px 30px rgba(0, 0, 0, 0.22);
@@ -84,6 +84,28 @@ button {
     transition: transform 180ms ease, opacity 180ms ease;
 }
 
+.toolbar-action {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+}
+
+.action-label {
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    line-height: 1;
+    transform: translateY(-12px);
+}
+
+.action-label-upload {
+    transform: translateY(-8px);
+}
+
 .logo-wrap:hover {
     transform: translateY(-1px);
 }
@@ -106,21 +128,21 @@ button {
 .danger-button,
 .publish-button,
 .drop-inline-button {
-    min-height: 44px;
-    padding: 0 18px;
-    border-radius: 12px;
+    min-height: 0;
+    padding: 0;
+    border-radius: 0;
     font-weight: 700;
     line-height: 1;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
 }
 
 .primary-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
-    background: linear-gradient(135deg, var(--blue), var(--blue-strong));
-    color: white;
-    white-space: nowrap;
+    color: #7fbcff;
 }
 
 .primary-button:hover,
@@ -130,52 +152,64 @@ button {
 .drop-simple-button:hover,
 .icon-button:hover {
     transform: translateY(-2px);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    box-shadow: none;
+}
+
+.topbar .primary-button:hover,
+.footer-bar .publish-button:hover,
+.footer-bar .danger-button:hover,
+.drop-inline-button:hover {
+    transform: scale(1.06);
+    opacity: 0.9;
+    filter: brightness(1.08);
 }
 
 .button-icon {
-    width: 18px;
-    height: 18px;
+    width: 66px;
+    height: 66px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    flex: 0 0 18px;
+    flex: 0 0 66px;
     position: relative;
-    top: -1px;
+    top: 0;
 }
 
 .button-icon svg {
-    width: 18px;
-    height: 18px;
+    width: 66px;
+    height: 66px;
     display: block;
 }
 
 .button-icon path {
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 2;
-    stroke-linecap: round;
-    stroke-linejoin: round;
+    fill: currentColor;
+    stroke: none;
 }
 
 .danger-button {
-    background: rgba(255, 107, 107, 0.12);
-    color: #ffb0b0;
-    border: 1px solid rgba(255, 107, 107, 0.26);
+    color: #ff8f8f;
 }
 
 .publish-button {
-    background: linear-gradient(135deg, #24b75f, var(--green));
-    color: white;
+    color: #63d98c;
 }
 
 .main-layout {
     width: 100%;
     margin: 0;
-    padding: 104px 0 104px;
+    padding: 104px 0;
     display: flex;
     flex-direction: column;
     justify-content: flex-start;
+}
+
+.main-layout.is-empty {
+    min-height: 100vh;
+    padding: 76px 0;
+}
+
+.main-layout.has-items {
+    padding-bottom: 104px;
 }
 
 .drop-layer {
@@ -192,7 +226,7 @@ button {
 }
 
 .drop-simple {
-    min-height: calc(100vh - 200px);
+    min-height: calc(100vh - 152px);
     display: grid;
     place-items: center;
     align-content: center;
@@ -232,12 +266,48 @@ button {
     stroke-width: 1.7;
 }
 
+.center-button-icon {
+    width: 52px;
+    height: 52px;
+    flex: 0 0 52px;
+}
+
+.center-button-icon svg {
+    width: 52px;
+    height: 52px;
+}
+
 .drop-inline-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
+    gap: 0;
     white-space: nowrap;
+    min-height: auto;
+    padding: 0;
+    border-radius: 0;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    outline: none !important;
+    appearance: none;
+    -webkit-appearance: none;
+    opacity: 0.72;
+}
+
+.drop-inline-button::before,
+.drop-inline-button::after {
+    content: none !important;
+}
+
+.drop-inline-button:hover,
+.drop-inline-button:focus,
+.drop-inline-button:focus-visible,
+.drop-inline-button:active {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    outline: none !important;
 }
 
 .drop-simple h1 {
@@ -511,6 +581,10 @@ button {
   .main-layout {
     width: 100%;
     padding: 96px 0 96px;
+  }
+
+  .main-layout.is-empty {
+    padding: 76px 0;
   }
 
     .primary-button,
