@@ -44,6 +44,8 @@ type ErrorResponse = {
   error: string;
 };
 
+type CatalogResponse = CatalogState | ErrorResponse;
+
 const app = document.querySelector<HTMLDivElement>("#app");
 
 if (!app) {
@@ -70,10 +72,32 @@ const state: {
   },
   isDragging: false,
   isUploading: false,
-  message: "Prevuci JSON fajl ili klikni na + Upload.",
+  message: "Prevuci JSON fajl ili klikni na Dodaj jos.",
   messageTone: "muted",
   imageIndexes: {},
 };
+
+const plusIcon = `
+  <svg viewBox="0 0 20 20" aria-hidden="true">
+    <path d="M10 4.5v11M4.5 10h11" />
+  </svg>
+`;
+
+const editIcon = `
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M20 14.66V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5.34" />
+    <path d="M18 2 22 6 12 16 8 16 8 12 18 2" />
+  </svg>
+`;
+
+const categorizeIcon = `
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M17 10h2c2 0 3-1 3-3V5c0-2-1-3-3-3H17c-2 0-3 1-3 3V7c0 2 1 3 3 3z" />
+    <path d="M5 22H7c2 0 3-1 3-3V17c0-2-1-3-3-3H5c-2 0-3 1-3 3v2c0 2 1 3 3 3z" />
+    <path d="M6 10c2.209 0 4-1.791 4-4S8.209 2 6 2 2 3.791 2 6s1.791 4 4 4z" opacity="0.34" />
+    <path d="M18 22c2.209 0 4-1.791 4-4s-1.791-4-4-4-4 1.791-4 4 1.791 4 4 4z" opacity="0.34" />
+  </svg>
+`;
 
 function render(): void {
   const hasItems = state.data.items.length > 0;
@@ -106,10 +130,22 @@ function render(): void {
             ${
               item.images.length > 1
                 ? `
-                  <button class="image-arrow left" data-image-nav="prev" data-image-key="${escapeHtml(imageKey)}" type="button">&#8249;</button>
-                  <button class="image-arrow right" data-image-nav="next" data-image-key="${escapeHtml(imageKey)}" type="button">&#8250;</button>
-                  <div class="image-count">${currentImageIndex + 1}/${item.images.length}</div>
+                  <button class="image-arrow left" data-image-nav="prev" data-image-key="${escapeHtml(imageKey)}" type="button" aria-label="Prethodna slika">
+                    <svg viewBox="0 0 20 20" aria-hidden="true">
+                      <path d="M12.5 4.5 7 10l5.5 5.5" />
+                    </svg>
+                  </button>
+                  <button class="image-arrow right" data-image-nav="next" data-image-key="${escapeHtml(imageKey)}" type="button" aria-label="Sledeca slika">
+                    <svg viewBox="0 0 20 20" aria-hidden="true">
+                      <path d="M7.5 4.5 13 10l-5.5 5.5" />
+                    </svg>
+                  </button>
                 `
+                : ""
+            }
+            ${
+              item.images.length > 0
+                ? `<div class="image-count">${currentImageIndex + 1}/${item.images.length}</div>`
                 : ""
             }
           </div>
@@ -122,7 +158,14 @@ function render(): void {
             <p>${escapeHtml(item.technicalDescription || "Nema opisa.")}</p>
             <div class="product-line bottom">
               <strong>${price}</strong>
-              <small>${escapeHtml(item.status.name || "Status")}</small>
+              <div class="card-actions">
+                <button class="icon-button" type="button" aria-label="Kategorizacija">
+                  ${categorizeIcon}
+                </button>
+                <button class="icon-button" type="button" aria-label="Promjeni">
+                  ${editIcon}
+                </button>
+              </div>
             </div>
           </div>
         </article>
@@ -135,17 +178,18 @@ function render(): void {
       <header class="topbar">
         <div class="logo-wrap">
           <div class="logo-mark">IC</div>
-          <strong>ICAI Catalog</strong>
+          <strong>ICAI</strong>
         </div>
         <button class="primary-button" id="uploadButton" ${
           state.isUploading ? "disabled" : ""
         }>
-          <span>+</span>
-          Upload
+          <span class="button-icon">${plusIcon}</span>
+          Dodaj jos
         </button>
       </header>
 
       <main class="main-layout">
+        <section class="drop-layer ${state.isDragging ? "dragging" : ""}" id="dropZone">
         <input id="fileInput" type="file" accept=".json,application/json" multiple hidden />
 
         ${
@@ -156,11 +200,11 @@ function render(): void {
               </section>
             `
             : `
-              <section class="drop-simple ${state.isDragging ? "dragging" : ""}" id="dropZone">
+              <section class="drop-simple">
                 <button class="drop-simple-button" id="browseButton" ${
                   state.isUploading ? "disabled" : ""
                 }>
-                  <span>+</span>
+                  <span class="button-icon">${plusIcon}</span>
                 </button>
                 <h1>UBACI ARTIKLE</h1>
                 <p class="${state.messageTone}">${escapeHtml(state.message)}</p>
@@ -171,14 +215,15 @@ function render(): void {
         ${
           hasItems
             ? `
-              <section class="drop-inline ${state.isDragging ? "dragging" : ""}" id="dropZone">
+              <section class="drop-inline">
                 <button class="drop-inline-button" id="browseButton" ${
                   state.isUploading ? "disabled" : ""
-                }>+ Dodaj jos</button>
+                }><span class="button-icon">${plusIcon}</span>Dodaj jos</button>
               </section>
             `
             : ""
         }
+        </section>
       </main>
 
       <footer class="footer-bar">
@@ -193,11 +238,14 @@ function render(): void {
 
 function bindEvents(): void {
   const fileInput = document.querySelector<HTMLInputElement>("#fileInput");
-  const uploadButton = document.querySelector<HTMLButtonElement>("#uploadButton");
-  const browseButton = document.querySelector<HTMLButtonElement>("#browseButton");
+  const uploadButton =
+    document.querySelector<HTMLButtonElement>("#uploadButton");
+  const browseButton =
+    document.querySelector<HTMLButtonElement>("#browseButton");
   const dropZone = document.querySelector<HTMLElement>("#dropZone");
   const clearButton = document.querySelector<HTMLButtonElement>("#clearButton");
-  const imageButtons = document.querySelectorAll<HTMLButtonElement>("[data-image-nav]");
+  const imageButtons =
+    document.querySelectorAll<HTMLButtonElement>("[data-image-nav]");
 
   if (!fileInput || !uploadButton || !clearButton) {
     return;
@@ -246,7 +294,7 @@ function bindEvents(): void {
     clearButton.disabled = true;
     try {
       const response = await fetch("/api/catalog", { method: "DELETE" });
-      const data = (await response.json()) as CatalogState | ErrorResponse;
+      const data = (await response.json()) as CatalogResponse;
 
       if (!response.ok) {
         throw new Error("error" in data ? data.error : "Brisanje nije uspelo.");
@@ -257,7 +305,8 @@ function bindEvents(): void {
       state.message = "Sve je obrisano.";
       state.messageTone = "success";
     } catch (error) {
-      state.message = error instanceof Error ? error.message : "Brisanje nije uspelo.";
+      state.message =
+        error instanceof Error ? error.message : "Brisanje nije uspelo.";
       state.messageTone = "danger";
     } finally {
       clearButton.disabled = false;
@@ -284,7 +333,8 @@ function bindEvents(): void {
 
       const currentIndex = state.imageIndexes[imageKey] ?? 0;
       const delta = direction === "next" ? 1 : -1;
-      const nextIndex = (currentIndex + delta + item.images.length) % item.images.length;
+      const nextIndex =
+        (currentIndex + delta + item.images.length) % item.images.length;
       state.imageIndexes[imageKey] = nextIndex;
       render();
     });
@@ -294,7 +344,7 @@ function bindEvents(): void {
 async function loadState(): Promise<void> {
   try {
     const response = await fetch("/api/catalog");
-    const data = (await response.json()) as CatalogState | ErrorResponse;
+    const data = (await response.json()) as CatalogResponse;
 
     if (!response.ok) {
       throw new Error("error" in data ? data.error : "Ucitavanje nije uspelo.");
@@ -307,7 +357,8 @@ async function loadState(): Promise<void> {
       state.messageTone = "success";
     }
   } catch (error) {
-    state.message = error instanceof Error ? error.message : "Backend nije dostupan.";
+    state.message =
+      error instanceof Error ? error.message : "Backend nije dostupan.";
     state.messageTone = "danger";
   } finally {
     render();
@@ -315,7 +366,9 @@ async function loadState(): Promise<void> {
 }
 
 async function uploadFiles(files: File[]): Promise<void> {
-  const jsonFiles = files.filter((file) => file.name.toLowerCase().endsWith(".json"));
+  const jsonFiles = files.filter((file) =>
+    file.name.toLowerCase().endsWith(".json"),
+  );
   if (jsonFiles.length === 0) {
     state.message = "Izaberi barem jedan .json fajl.";
     state.messageTone = "danger";
@@ -339,7 +392,7 @@ async function uploadFiles(files: File[]): Promise<void> {
       body: formData,
     });
 
-    const data = (await response.json()) as CatalogState | ErrorResponse;
+    const data = (await response.json()) as CatalogResponse;
     if (!response.ok) {
       throw new Error("error" in data ? data.error : "Upload nije uspeo.");
     }
@@ -354,7 +407,8 @@ async function uploadFiles(files: File[]): Promise<void> {
     state.message = "Artikli su dodati.";
     state.messageTone = "success";
   } catch (error) {
-    state.message = error instanceof Error ? error.message : "Upload nije uspeo.";
+    state.message =
+      error instanceof Error ? error.message : "Upload nije uspeo.";
     state.messageTone = "danger";
   } finally {
     state.isUploading = false;
