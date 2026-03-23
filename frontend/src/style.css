@@ -1440,6 +1440,14 @@ button {
     margin-left: auto;
 }
 
+.category-bulk-body {
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 10px;
+    scrollbar-gutter: stable;
+}
+
 .category-page {
     min-height: 0;
     display: flex;

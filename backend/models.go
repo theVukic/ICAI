@@ -90,6 +90,14 @@ type CategorySaveRequest struct {
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
+type CategoryBulkSaveRequest struct {
+	TowKods    []string          `json:"towKods"`
+	Category   *OLXCategoryNode  `json:"category"`
+	Brand      *OLXBrand         `json:"brand,omitempty"`
+	Model      *OLXModel         `json:"model,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
 type OLXCategoryNode struct {
 	ID                int    `json:"id"`
 	Name              string `json:"name"`

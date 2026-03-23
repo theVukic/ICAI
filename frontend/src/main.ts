@@ -1,4 +1,5 @@
 import "./style.css";
+import { mountBulkCategoryPage } from "./bulk-category";
 import { mountCategoryPage } from "./category";
 import { mountBulkEditPage } from "./bulk-edit";
 import { mountEditPage } from "./edit";
@@ -246,6 +247,11 @@ const categorySelectedIcon = `
 `;
 
 function render(): void {
+  if (isBulkCategoryPath()) {
+    mountBulkCategoryPage(root);
+    return;
+  }
+
   if (isBulkEditPath()) {
     mountBulkEditPage(root);
     return;
@@ -524,6 +530,8 @@ function bindEvents(): void {
     document.querySelector<HTMLButtonElement>("#selectionButton");
   const selectAllButton =
     document.querySelector<HTMLButtonElement>("#selectAllButton");
+  const categorySelectedButton =
+    document.querySelector<HTMLButtonElement>("#categorySelectedButton");
   const editSelectedButton =
     document.querySelector<HTMLButtonElement>("#editSelectedButton");
   const selectableCards =
@@ -626,6 +634,13 @@ function bindEvents(): void {
     }
 
     navigateWithFade(root, "/edit-selected");
+  });
+  categorySelectedButton?.addEventListener("click", () => {
+    if (state.selectedTowKods.length === 0) {
+      return;
+    }
+
+    navigateWithFade(root, "/category-selected");
   });
   for (const card of selectableCards) {
     card.addEventListener("click", (event) => {
@@ -1071,6 +1086,10 @@ function getEditTowKodFromPath(): string | null {
   }
 }
 
+function isBulkCategoryPath(): boolean {
+  return window.location.pathname === "/category-selected";
+}
+
 function isBulkEditPath(): boolean {
   return window.location.pathname === "/edit-selected";
 }
@@ -1088,7 +1107,9 @@ function getCategoryTowKodFromPath(): string | null {
   }
 }
 
-if (isBulkEditPath()) {
+if (isBulkCategoryPath()) {
+  mountBulkCategoryPage(root);
+} else if (isBulkEditPath()) {
   mountBulkEditPage(root);
 } else {
   const editTowKod = getEditTowKodFromPath();

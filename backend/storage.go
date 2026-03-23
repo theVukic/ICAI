@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -192,6 +193,63 @@ func (s *CatalogStore) SaveCategorization(towKod string, selection ItemCategoryS
 	}
 
 	return CatalogItem{}, fmt.Errorf("%w: %s", errCatalogItemNotFound, towKod)
+}
+
+func (s *CatalogStore) SaveCategorizationBulk(towKods []string, selection ItemCategorySelection) ([]CatalogItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if selection.Category == nil || selection.Category.ID == 0 {
+		return nil, fmt.Errorf("kategorija je obavezna")
+	}
+
+	targets := make(map[string]struct{}, len(towKods))
+	for _, towKod := range towKods {
+		trimmed := strings.TrimSpace(towKod)
+		if trimmed == "" {
+			continue
+		}
+		targets[trimmed] = struct{}{}
+	}
+
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("odaberi barem jedan artikal")
+	}
+
+	updatedByCatalog := make(map[int]bool)
+	updatedItems := make([]CatalogItem, 0, len(targets))
+
+	for catalogIndex := range s.catalogs {
+		catalog := &s.catalogs[catalogIndex]
+		for itemIndex := range catalog.Items {
+			item := &catalog.Items[itemIndex]
+			if _, ok := targets[item.TowKod]; !ok {
+				continue
+			}
+
+			copied := selection
+			s.categorizations[item.TowKod] = selection
+			item.Categorization = &copied
+
+			itemCopy := *item
+			itemCopy.Categorization = &copied
+			updatedItems = append(updatedItems, itemCopy)
+			updatedByCatalog[catalogIndex] = true
+			delete(targets, item.TowKod)
+		}
+	}
+
+	if len(updatedItems) == 0 {
+		return nil, fmt.Errorf("artikli nisu pronađeni")
+	}
+
+	for catalogIndex := range updatedByCatalog {
+		if err := s.writeCatalogFile(s.catalogs[catalogIndex]); err != nil {
+			return nil, err
+		}
+	}
+
+	return updatedItems, nil
 }
 
 func (s *CatalogStore) Cleanup() error {

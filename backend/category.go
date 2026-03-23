@@ -291,6 +291,34 @@ func (a *App) handleCategoryItem(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *App) handleCategoryBulk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req CategoryBulkSaveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "neispravan JSON body")
+		return
+	}
+
+	selection := ItemCategorySelection{
+		Category:   req.Category,
+		Brand:      req.Brand,
+		Model:      req.Model,
+		Attributes: req.Attributes,
+	}
+
+	items, err := a.store.SaveCategorizationBulk(req.TowKods, selection)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, items)
+}
+
 func (a *App) handleOLXCategories(w http.ResponseWriter, r *http.Request) {
 	if a.olxCategories == nil || !a.olxCategories.HasToken() {
 		writeError(w, http.StatusBadRequest, "OLX token nije podešen. Zalijepi ga u backend/token.json")
