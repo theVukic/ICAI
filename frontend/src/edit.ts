@@ -136,8 +136,11 @@ function renderEditPage(root: HTMLDivElement, towKod: string): void {
                   : `<div class="product-placeholder" id="editImagePlaceholder">Nema slike</div>`
               }
               ${
-                imageCount > 1
+                imageCount > 0
                   ? `
+                    ${
+                      imageCount > 1
+                        ? `
                     <button class="image-arrow left is-visible" data-edit-image-nav="prev" type="button" aria-label="Prethodna slika">
                       <svg viewBox="0 0 20 20" aria-hidden="true">
                         <path d="M12.5 4.5 7 10l5.5 5.5" />
@@ -148,6 +151,9 @@ function renderEditPage(root: HTMLDivElement, towKod: string): void {
                         <path d="M7.5 4.5 13 10l-5.5 5.5" />
                       </svg>
                     </button>
+                    `
+                        : ""
+                    }
                     <div class="image-count" id="editImageCount">${safeImageIndex + 1}/${imageCount}</div>
                   `
                   : ""

@@ -54,6 +54,27 @@ func (a *App) handleCatalogItem(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *App) handleCatalogBulkEdit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req CatalogBulkEditRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "neispravan JSON body")
+		return
+	}
+
+	items, err := a.store.UpdateItemsBulk(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, items)
+}
+
 func itemCodeFromPath(path string) (string, error) {
 	const prefix = "/"
 
@@ -171,4 +192,91 @@ func (s *CatalogStore) writeCatalogFile(catalog UploadedCatalog) error {
 	}
 
 	return nil
+}
+
+func (s *CatalogStore) UpdateItemsBulk(req CatalogBulkEditRequest) ([]CatalogItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(req.TowKods) == 0 {
+		return nil, fmt.Errorf("odaberi barem jedan artikal")
+	}
+
+	if req.Name == nil && req.Price == nil && req.Description == nil && req.CurrencyCode == nil {
+		return nil, fmt.Errorf("popuni barem jedno polje za izmjenu")
+	}
+
+	if req.Name != nil {
+		trimmed := strings.TrimSpace(*req.Name)
+		req.Name = &trimmed
+	}
+
+	if req.Description != nil {
+		trimmed := strings.TrimSpace(*req.Description)
+		req.Description = &trimmed
+	}
+
+	if req.CurrencyCode != nil {
+		trimmed := strings.TrimSpace(*req.CurrencyCode)
+		req.CurrencyCode = &trimmed
+	}
+
+	if req.Price != nil && *req.Price < 0 {
+		return nil, fmt.Errorf("cijena ne može biti negativna")
+	}
+
+	targets := make(map[string]struct{}, len(req.TowKods))
+	for _, towKod := range req.TowKods {
+		trimmed := strings.TrimSpace(towKod)
+		if trimmed == "" {
+			continue
+		}
+		targets[trimmed] = struct{}{}
+	}
+
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("odaberi barem jedan artikal")
+	}
+
+	updatedByCatalog := make(map[int]bool)
+	updatedItems := make([]CatalogItem, 0, len(targets))
+
+	for catalogIndex := range s.catalogs {
+		catalog := &s.catalogs[catalogIndex]
+		for itemIndex := range catalog.Items {
+			item := &catalog.Items[itemIndex]
+			if _, ok := targets[item.TowKod]; !ok {
+				continue
+			}
+
+			if req.Name != nil {
+				item.NameB2B = *req.Name
+			}
+			if req.Price != nil {
+				item.RetailPrice = *req.Price
+			}
+			if req.Description != nil {
+				item.TechnicalDescription = *req.Description
+			}
+			if req.CurrencyCode != nil && *req.CurrencyCode != "" {
+				item.CurrencyCode = *req.CurrencyCode
+			}
+
+			updatedItems = append(updatedItems, *item)
+			updatedByCatalog[catalogIndex] = true
+			delete(targets, item.TowKod)
+		}
+	}
+
+	if len(updatedItems) == 0 {
+		return nil, fmt.Errorf("artikli nisu pronađeni")
+	}
+
+	for catalogIndex := range updatedByCatalog {
+		if err := s.writeCatalogFile(s.catalogs[catalogIndex]); err != nil {
+			return nil, err
+		}
+	}
+
+	return updatedItems, nil
 }

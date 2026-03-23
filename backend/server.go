@@ -123,6 +123,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 		a.handleCatalogUpload(w, r)
 	})
 
+	mux.HandleFunc("/api/catalog/bulk-edit", a.handleCatalogBulkEdit)
 	mux.HandleFunc("/api/catalog/item/", a.handleCatalogItem)
 	mux.HandleFunc("/api/category/item/", a.handleCategoryItem)
 	mux.HandleFunc("/api/olx/", a.handleOLXCategories)

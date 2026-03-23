@@ -62,6 +62,14 @@ type CatalogItemEditRequest struct {
 	Description string  `json:"description"`
 }
 
+type CatalogBulkEditRequest struct {
+	TowKods      []string  `json:"towKods"`
+	Name         *string   `json:"name,omitempty"`
+	Price        *float64  `json:"price,omitempty"`
+	Description  *string   `json:"description,omitempty"`
+	CurrencyCode *string   `json:"currencyCode,omitempty"`
+}
+
 type ItemCategorySelection struct {
 	Category   *OLXCategoryNode  `json:"category,omitempty"`
 	Brand      *OLXBrand         `json:"brand,omitempty"`

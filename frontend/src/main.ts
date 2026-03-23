@@ -1,5 +1,6 @@
 import "./style.css";
 import { mountCategoryPage } from "./category";
+import { mountBulkEditPage } from "./bulk-edit";
 import { mountEditPage } from "./edit";
 import { loadSessionInfo, renderSessionBadge } from "./session";
 import { mountPageTransition, navigateWithFade } from "./transition";
@@ -245,6 +246,11 @@ const categorySelectedIcon = `
 `;
 
 function render(): void {
+  if (isBulkEditPath()) {
+    mountBulkEditPage(root);
+    return;
+  }
+
   const editTowKod = getEditTowKodFromPath();
   if (editTowKod) {
     mountEditPage(root, editTowKod);
@@ -518,6 +524,8 @@ function bindEvents(): void {
     document.querySelector<HTMLButtonElement>("#selectionButton");
   const selectAllButton =
     document.querySelector<HTMLButtonElement>("#selectAllButton");
+  const editSelectedButton =
+    document.querySelector<HTMLButtonElement>("#editSelectedButton");
   const selectableCards =
     document.querySelectorAll<HTMLElement>("[data-select-card]");
   const sortMenu = document.querySelector<HTMLElement>("#sortMenu");
@@ -611,6 +619,13 @@ function bindEvents(): void {
         render();
       }, 240);
     }
+  });
+  editSelectedButton?.addEventListener("click", () => {
+    if (state.selectedTowKods.length === 0) {
+      return;
+    }
+
+    navigateWithFade(root, "/edit-selected");
   });
   for (const card of selectableCards) {
     card.addEventListener("click", (event) => {
@@ -1056,6 +1071,10 @@ function getEditTowKodFromPath(): string | null {
   }
 }
 
+function isBulkEditPath(): boolean {
+  return window.location.pathname === "/edit-selected";
+}
+
 function getCategoryTowKodFromPath(): string | null {
   const match = window.location.pathname.match(/^\/category\/(.+)$/);
   if (!match) {
@@ -1069,15 +1088,19 @@ function getCategoryTowKodFromPath(): string | null {
   }
 }
 
-const editTowKod = getEditTowKodFromPath();
-if (editTowKod) {
-  mountEditPage(root, editTowKod);
+if (isBulkEditPath()) {
+  mountBulkEditPage(root);
 } else {
-  const categoryTowKod = getCategoryTowKodFromPath();
-  if (categoryTowKod) {
-    mountCategoryPage(root, categoryTowKod);
+  const editTowKod = getEditTowKodFromPath();
+  if (editTowKod) {
+    mountEditPage(root, editTowKod);
   } else {
-    void loadState();
+    const categoryTowKod = getCategoryTowKodFromPath();
+    if (categoryTowKod) {
+      mountCategoryPage(root, categoryTowKod);
+    } else {
+      void loadState();
+    }
   }
 }
 
