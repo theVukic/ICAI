@@ -170,3 +170,36 @@ type DescriptionRenderResponse struct {
 	TowKod      string `json:"towKod"`
 	Content     string `json:"content"`
 }
+
+type CatalogPublishRequest struct {
+	SelectedTowKods []string `json:"selectedTowKods"`
+}
+
+type PublishedListingResult struct {
+	TowKod      string `json:"towKod"`
+	Title       string `json:"title"`
+	ListingID   int    `json:"listingId"`
+	Published   bool   `json:"published"`
+	PublishedAt string `json:"publishedAt,omitempty"`
+	Message     string `json:"message,omitempty"`
+}
+
+type SkippedListingResult struct {
+	TowKod  string `json:"towKod"`
+	Title   string `json:"title"`
+	Reason  string `json:"reason"`
+}
+
+type FailedListingResult struct {
+	TowKod string `json:"towKod"`
+	Title  string `json:"title"`
+	Error  string `json:"error"`
+}
+
+type CatalogPublishResponse struct {
+	Message   string                  `json:"message"`
+	Published []PublishedListingResult `json:"published"`
+	Skipped   []SkippedListingResult   `json:"skipped"`
+	Failed    []FailedListingResult    `json:"failed"`
+	State     CatalogState             `json:"state"`
+}

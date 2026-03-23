@@ -127,6 +127,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("/api/catalog/bulk-delete", a.handleCatalogBulkDelete)
 	mux.HandleFunc("/api/catalog/bulk-edit", a.handleCatalogBulkEdit)
+	mux.HandleFunc("/api/catalog/publish", a.handleCatalogPublish)
 	mux.HandleFunc("/api/catalog/item/", a.handleCatalogItem)
 	mux.HandleFunc("/api/description/render/", a.handleDescriptionRender)
 	mux.HandleFunc("/api/description", a.handleDescription)

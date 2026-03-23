@@ -58,6 +58,29 @@ type ErrorResponse = {
 
 type CatalogResponse = CatalogState | ErrorResponse;
 
+type PublishResponse = {
+  message: string;
+  published: Array<{
+    towKod: string;
+    title: string;
+    listingId: number;
+    published: boolean;
+    publishedAt?: string;
+    message?: string;
+  }>;
+  skipped: Array<{
+    towKod: string;
+    title: string;
+    reason: string;
+  }>;
+  failed: Array<{
+    towKod: string;
+    title: string;
+    error: string;
+  }>;
+  state: CatalogState;
+};
+
 const VIEW_MODE_STORAGE_KEY = "icaiapp:view-mode";
 const SORT_MODE_STORAGE_KEY = "icaiapp:sort-mode";
 const SELECTION_MODE_STORAGE_KEY = "icaiapp:selection-mode";
@@ -99,6 +122,7 @@ const state: {
   selectAllMode: boolean;
   selectedTowKods: string[];
   isDeletingSelected: boolean;
+  isPublishing: boolean;
   selectionPulseTowKods: string[];
   animateItemsIn: boolean;
   sessionUsername: string;
@@ -127,6 +151,7 @@ const state: {
   selectAllMode: loadStoredSelectAllMode(),
   selectedTowKods: loadStoredSelectedTowKods(),
   isDeletingSelected: false,
+  isPublishing: false,
   selectionPulseTowKods: [],
   animateItemsIn: false,
   sessionUsername: "",
@@ -531,7 +556,9 @@ function render(): void {
           <span class="action-label">OBRISI</span>
         </div>
         <div class="toolbar-action">
-          <button class="publish-button" type="button">
+          <button class="publish-button" id="publishButton" type="button" ${
+            state.isPublishing ? "disabled" : ""
+          }>
             <span class="button-icon">${publishIcon}</span>
           </button>
           <span class="action-label">OBJAVI</span>
@@ -569,6 +596,8 @@ function bindEvents(): void {
     document.querySelector<HTMLButtonElement>("#browseButton");
   const dropZone = document.querySelector<HTMLElement>("#dropZone");
   const clearButton = document.querySelector<HTMLButtonElement>("#clearButton");
+  const publishButton =
+    document.querySelector<HTMLButtonElement>("#publishButton");
   const imageButtons =
     document.querySelectorAll<HTMLButtonElement>("[data-image-nav]");
   const editButtons =
@@ -709,6 +738,88 @@ function bindEvents(): void {
       state.messageTone = "danger";
     } finally {
       state.isDeletingSelected = false;
+      render();
+    }
+  });
+  publishButton?.addEventListener("click", async () => {
+    if (state.isPublishing || state.data.items.length === 0) {
+      return;
+    }
+
+    console.log("[PUBLISH] click", {
+      selectedTowKods: state.selectedTowKods,
+      totalItems: state.data.items.length,
+      selectedItems: state.data.items.filter((item) =>
+        state.selectedTowKods.includes(item.towKod),
+      ),
+      categorizableItems: state.data.items.filter(
+        (item) => Boolean(item.categorization?.category?.id),
+      ),
+    });
+
+    state.isPublishing = true;
+    state.message =
+      state.selectedTowKods.length > 0
+        ? "Objavljujem selektovane artikle sa zelenom kategorizacijom..."
+        : "Objavljujem sve artikle sa zelenom kategorizacijom...";
+    state.messageTone = "muted";
+    render();
+
+    try {
+      const requestBody = {
+        selectedTowKods: state.selectedTowKods,
+      };
+      console.log("[PUBLISH] request body", requestBody);
+
+      const response = await fetch("/api/catalog/publish", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      const data = (await response.json()) as PublishResponse | ErrorResponse;
+      console.log("[PUBLISH] response", {
+        ok: response.ok,
+        status: response.status,
+        data,
+      });
+      if (!response.ok) {
+        throw new Error("error" in data ? data.error : "Objava nije uspela.");
+      }
+
+      const publishData = data as PublishResponse;
+      state.data = publishData.state;
+      state.imageIndexes = filterImageIndexesByItems(state.imageIndexes, state.data.items);
+      state.selectedTowKods = state.selectedTowKods.filter((towKod) =>
+        state.data.items.some((item) => item.towKod === towKod),
+      );
+      reconcileSelectionState();
+
+      const summaryParts = [
+        `Objavljeno ${publishData.published.length}`,
+        `preskoceno ${publishData.skipped.length}`,
+        `gresaka ${publishData.failed.length}`,
+      ];
+      const primaryMessage =
+        publishData.failed[0]?.error ||
+        publishData.skipped[0]?.reason ||
+        publishData.message;
+      state.message = `${summaryParts.join(" | ")}${primaryMessage ? ` | ${primaryMessage}` : ""}`;
+      state.messageTone =
+        publishData.failed.length > 0
+          ? "danger"
+          : publishData.published.length > 0
+            ? "success"
+            : "muted";
+    } catch (error) {
+      console.error("[PUBLISH] frontend error", error);
+      state.message =
+        error instanceof Error ? error.message : "Objava nije uspela.";
+      state.messageTone = "danger";
+    } finally {
+      state.isPublishing = false;
       render();
     }
   });
