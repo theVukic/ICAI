@@ -57,6 +57,19 @@ type ErrorResponse = {
 type CatalogResponse = CatalogState | ErrorResponse;
 
 const VIEW_MODE_STORAGE_KEY = "icaiapp:view-mode";
+const SORT_MODE_STORAGE_KEY = "icaiapp:sort-mode";
+const SELECTION_MODE_STORAGE_KEY = "icaiapp:selection-mode";
+const SELECT_ALL_STORAGE_KEY = "icaiapp:select-all";
+const SELECTED_TOWKODS_STORAGE_KEY = "icaiapp:selected-towkods";
+
+type SortMode = "price-asc" | "price-desc" | "name" | "brand";
+
+const SORT_MODE_LABELS: Record<SortMode, string> = {
+  "price-asc": "Cijena najniza",
+  "price-desc": "Cijena najvisa",
+  name: "Ime",
+  brand: "Brend",
+};
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -75,6 +88,15 @@ const state: {
   messageTone: "muted" | "success" | "danger";
   imageIndexes: Record<string, number>;
   viewMode: "grid" | "list";
+  sortMode: SortMode;
+  sortMenuOpen: boolean;
+  selectionMode: boolean;
+  selectionAnimation: "" | "animate-on" | "animate-off";
+  selectionToolsVisible: boolean;
+  selectionToolsAnimation: "" | "selection-tools-enter" | "selection-tools-exit";
+  selectAllMode: boolean;
+  selectedTowKods: string[];
+  selectionPulseTowKods: string[];
   animateItemsIn: boolean;
   sessionUsername: string;
   tokenConfigured: boolean;
@@ -93,6 +115,15 @@ const state: {
   messageTone: "muted",
   imageIndexes: {},
   viewMode: loadStoredViewMode(),
+  sortMode: loadStoredSortMode(),
+  sortMenuOpen: false,
+  selectionMode: loadSessionSelectionMode(),
+  selectionAnimation: "",
+  selectionToolsVisible: loadSessionSelectionMode(),
+  selectionToolsAnimation: "",
+  selectAllMode: loadStoredSelectAllMode(),
+  selectedTowKods: loadStoredSelectedTowKods(),
+  selectionPulseTowKods: [],
   animateItemsIn: false,
   sessionUsername: "",
   tokenConfigured: false,
@@ -148,6 +179,39 @@ const gridViewIcon = `
   </svg>
 `;
 
+const sortIcon = `
+  <svg viewBox="0 0 200 200" aria-hidden="true">
+    <path d="M110.22 117.75h-80a10 10 0 000 20h80a10 10 0 000-20z" />
+    <path d="M177.22 125.75a9.67 9.67 0 00-14 0l-8 7.5V42.75a10 10 0 00-20 0v113.5a8.29 8.29 0 003 8 9.67 9.67 0 0014 0l24.5-24.5a10.13 10.13 0 00.5-14z" />
+    <path d="M110.22 37.75h-80a10 10 0 000 20h80a10 10 0 000-20z" />
+    <path d="M30.22 97.75h70a10 10 0 000-20h-70a10 10 0 000 20z" />
+  </svg>
+`;
+
+const selectionOffIcon = `
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M20.4961766 5.62668182C21.3720675 5.93447702 22 6.76890777 22 7.75v10C22 20.0972102 20.0972102 22 17.75 22h-10c-.98109223 0-1.81552298-.6279325-2.12331818-1.5038234L7.72396188 20.4995565 17.75 20.5c1.5187831 0 2.75-1.2312169 2.75-2.75v-10L20.4960194 7.69901943 20.4961766 5.62668182zM17.246813 2c1.2426407 0 2.25 1.00735931 2.25 2.25V17.246813c0 1.2426407-1.0073593 2.25-2.25 2.25H4.25c-1.24264069 0-2.25-1.0073593-2.25-2.25V4.25C2 3.00735931 3.00735931 2 4.25 2H17.246813zm0 1.5H4.25c-.41421356 0-.75.33578644-.75.75V17.246813c0 .4142136.33578644.75.75.75H17.246813c.4142136 0 .75-.3357864.75-.75V4.25c0-.41421356-.3357864-.75-.75-.75z" />
+  </svg>
+`;
+
+const selectionOnIcon = `
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M20.4961766 5.62668182C21.3720675 5.93447702 22 6.76890777 22 7.75v10C22 20.0972102 20.0972102 22 17.75 22h-10c-.98109223 0-1.81552298-.6279325-2.12331818-1.5038234L7.72396188 20.4995565 17.75 20.5c1.5187831 0 2.75-1.2312169 2.75-2.75v-10L20.4960194 7.69901943 20.4961766 5.62668182zM17.246813 2c1.2426407 0 2.25 1.00735931 2.25 2.25V17.246813c0 1.2426407-1.0073593 2.25-2.25 2.25H4.25c-1.24264069 0-2.25-1.0073593-2.25-2.25V4.25C2 3.00735931 3.00735931 2 4.25 2H17.246813z" />
+  </svg>
+`;
+
+const selectAllOffIcon = `
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M20.4961766 5.62668182C21.3720675 5.93447702 22 6.76890777 22 7.75v10C22 20.0972102 20.0972102 22 17.75 22h-10c-.98109223 0-1.81552298-.6279325-2.12331818-1.5038234L7.72396188 20.4995565 17.75 20.5c1.5187831 0 2.75-1.2312169 2.75-2.75v-10L20.4960194 7.69901943 20.4961766 5.62668182zM17.246813 2c1.2426407 0 2.25 1.00735931 2.25 2.25V17.246813c0 1.2426407-1.0073593 2.25-2.25 2.25H4.25c-1.24264069 0-2.25-1.0073593-2.25-2.25V4.25C2 3.00735931 3.00735931 2 4.25 2H17.246813zm0 1.5H4.25c-.41421356 0-.75.33578644-.75.75V17.246813c0 .4142136.33578644.75.75.75H17.246813c.4142136 0 .75-.3357864.75-.75V4.25c0-.41421356-.3357864-.75-.75-.75zM9.58114564 11.3581942 13.4696699 7.46966991C13.7625631 7.1767767 14.2374369 7.1767767 14.5303301 7.46966991 14.7965966 7.73593648 14.8208027 8.15260016 14.6029482 8.44621165L14.5303301 8.53033009l-4.5 4.50000001C9.73449239 13.3261678 9.26134027 13.3189471 8.97360394 13.0344464L8.9 12.95l-1.5-2C7.15147186 10.6186292 7.21862915 10.1485281 7.55 9.9 7.85124623 9.67406533 8.26714548 9.7090277 8.52699676 9.96621555L8.6 10.05 9.58114564 11.3581942 13.4696699 7.46966991 9.58114564 11.3581942z" />
+  </svg>
+`;
+
+const selectAllOnIcon = `
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M20.4961766 5.62668182C21.3720675 5.93447702 22 6.76890777 22 7.75v10C22 20.0972102 20.0972102 22 17.75 22h-10c-.98109223 0-1.81552298-.6279325-2.12331818-1.5038234L7.72396188 20.4995565 17.75 20.5c1.5187831 0 2.75-1.2312169 2.75-2.75v-10L20.4960194 7.69901943 20.4961766 5.62668182zM17.246813 2c1.2426407 0 2.25 1.00735931 2.25 2.25V17.246813c0 1.2426407-1.0073593 2.25-2.25 2.25H4.25c-1.24264069 0-2.25-1.0073593-2.25-2.25V4.25C2 3.00735931 3.00735931 2 4.25 2H17.246813zM13.4696699 7.46966991 9.58114564 11.3581942 8.6 10.05C8.35147186 9.71862915 7.88137085 9.65147186 7.55 9.9 7.21862915 10.1485281 7.15147186 10.6186292 7.4 10.95l1.5 2C9.17384721 13.3151296 9.70759806 13.3530621 10.0303301 13.0303301l4.5-4.50000001c.2928932-.29289322.2928932-.767766959999999 0-1.06066018C14.2374369 7.1767767 13.7625631 7.1767767 13.4696699 7.46966991z" />
+  </svg>
+`;
+
 const editIcon = `
   <svg viewBox="0 0 24 24" aria-hidden="true">
     <path d="M20 14.66V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5.34" />
@@ -161,6 +225,22 @@ const categorizeIcon = `
     <path d="M5 22H7c2 0 3-1 3-3V17c0-2-1-3-3-3H5c-2 0-3 1-3 3v2c0 2 1 3 3 3z" />
     <path d="M6 10c2.209 0 4-1.791 4-4S8.209 2 6 2 2 3.791 2 6s1.791 4 4 4z" opacity="0.34" />
     <path d="M18 22c2.209 0 4-1.791 4-4s-1.791-4-4-4-4 1.791-4 4 1.791 4 4 4z" opacity="0.34" />
+  </svg>
+`;
+
+const editSelectedIcon = `
+  <svg xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" width="24" height="24">
+    <path d="M20 14.66V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5.34" stroke="#F3F6FB" fill="none" stroke-width="1.8px"></path>
+    <path d="M18 2 22 6 12 16 8 16 8 12 18 2" stroke="#F3F6FB" fill="none" stroke-width="1.8px"></path>
+  </svg>
+`;
+
+const categorySelectedIcon = `
+  <svg xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" width="24" height="24">
+    <path d="M17 10h2c2 0 3-1 3-3V5c0-2-1-3-3-3H17c-2 0-3 1-3 3V7c0 2 1 3 3 3z" stroke="#F3F6FB" fill="none" stroke-width="1.8px"></path>
+    <path d="M5 22H7c2 0 3-1 3-3V17c0-2-1-3-3-3H5c-2 0-3 1-3 3v2c0 2 1 3 3 3z" stroke="#F3F6FB" fill="none" stroke-width="1.8px"></path>
+    <path d="M6 10c2.209 0 4-1.791 4-4S8.209 2 6 2 2 3.791 2 6s1.791 4 4 4z" opacity="0.34" stroke="#F3F6FB" fill="none" stroke-width="1.8px"></path>
+    <path d="M18 22c2.209 0 4-1.791 4-4s-1.791-4-4-4-4 1.791-4 4 1.791 4 4 4z" opacity="0.34" stroke="#F3F6FB" fill="none" stroke-width="1.8px"></path>
   </svg>
 `;
 
@@ -179,9 +259,17 @@ function render(): void {
 
   const hasItems = state.data.items.length > 0;
 
-  const cards = state.data.items
+  const sortedItems = sortItems(state.data.items, state.sortMode);
+
+  const cards = sortedItems
     .map((item) => {
       const imageKey = item.towKod || item.index || item.nameB2B;
+      const isSelected = item.towKod
+        ? state.selectedTowKods.includes(item.towKod)
+        : false;
+      const shouldPulse = item.towKod
+        ? state.selectionPulseTowKods.includes(item.towKod)
+        : false;
       const currentImageIndex = Math.min(
         state.imageIndexes[imageKey] ?? 0,
         Math.max(item.images.length - 1, 0),
@@ -194,8 +282,13 @@ function render(): void {
       const hasCategorization = Boolean(item.categorization?.category?.id);
 
       return `
-        <article class="product-card ${state.viewMode === "list" ? "list-mode" : ""}">
+        <article class="product-card ${state.viewMode === "list" ? "list-mode" : ""} ${state.selectionMode ? "selection-enabled" : ""} ${isSelected ? "is-selected" : ""} ${shouldPulse ? "selection-pulse" : ""}" data-select-card="${escapeHtml(item.towKod || "")}">
           <div class="product-media">
+            ${
+              isSelected
+                ? `<div class="selection-badge">ODABRANO</div>`
+                : ""
+            }
             ${
               image
                 ? `<img src="${image}" alt="${escapeHtml(item.nameB2B)}" loading="lazy" draggable="false" />`
@@ -256,6 +349,85 @@ function render(): void {
           ${renderSessionBadge(state.tokenConfigured ? { tokenConfigured: true, username: state.sessionUsername, fullName: "" } : null)}
         </div>
         <div class="header-actions">
+        ${
+          state.selectionToolsVisible
+            ? `
+              <div class="selection-tools ${state.selectionToolsAnimation}">
+                <div class="toolbar-action">
+                  <button class="header-icon-button selected-action-button category-selected-button" id="categorySelectedButton" type="button" aria-label="Kategorija za selektovane artikle">
+                    <span class="button-icon">${categorySelectedIcon}</span>
+                  </button>
+                  <span class="action-label action-label-toggle">KATEGORIJA</span>
+                </div>
+                <div class="toolbar-action">
+                  <button class="header-icon-button selected-action-button edit-selected-button" id="editSelectedButton" type="button" aria-label="Promjena za selektovane artikle">
+                    <span class="button-icon">${editSelectedIcon}</span>
+                  </button>
+                  <span class="action-label action-label-toggle">PROMJENA</span>
+                </div>
+                <div class="toolbar-action">
+                  <button
+                    class="header-icon-button select-all-button ${state.selectAllMode ? "is-active" : "is-inactive"}"
+                    id="selectAllButton"
+                    type="button"
+                    aria-label="${state.selectAllMode ? "Iskljuci sve" : "Ukljuci sve"}"
+                    aria-pressed="${state.selectAllMode ? "true" : "false"}"
+                  >
+                    <span class="button-icon select-all-icon">
+                      ${state.selectAllMode ? selectAllOnIcon : selectAllOffIcon}
+                    </span>
+                  </button>
+                  <span class="action-label action-label-toggle">SVE</span>
+                </div>
+              </div>
+            `
+            : ""
+        }
+        <div class="toolbar-action">
+          <button
+            class="header-icon-button selection-button ${state.selectionMode ? "is-active" : "is-inactive"}"
+            id="selectionButton"
+            type="button"
+            aria-label="${state.selectionMode ? "Iskljuci selekciju" : "Ukljuci selekciju"}"
+            aria-pressed="${state.selectionMode ? "true" : "false"}"
+          >
+            <span class="button-icon selection-icon ${state.selectionAnimation}">
+              ${state.selectionMode ? selectionOnIcon : selectionOffIcon}
+            </span>
+          </button>
+          <span class="action-label action-label-toggle">SELEKCIJA</span>
+        </div>
+        <div class="toolbar-action">
+          <button class="header-icon-button sort-button ${state.sortMenuOpen ? "is-open" : ""}" id="sortButton" type="button" aria-label="Sortiraj artikle" aria-expanded="${state.sortMenuOpen ? "true" : "false"}">
+            <span class="button-icon sort-icon">${sortIcon}</span>
+          </button>
+          <span class="action-label action-label-toggle">SORTIRAJ</span>
+          ${
+            state.sortMenuOpen
+              ? `
+                <div class="sort-menu" id="sortMenu" role="menu" aria-label="Opcije sortiranja">
+                  ${(
+                    Object.entries(SORT_MODE_LABELS) as Array<[SortMode, string]>
+                  )
+                    .map(
+                      ([mode, label]) => `
+                        <button
+                          class="sort-menu-item ${state.sortMode === mode ? "is-active" : ""}"
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked="${state.sortMode === mode ? "true" : "false"}"
+                          data-sort-mode="${mode}"
+                        >
+                          ${label}
+                        </button>
+                      `,
+                    )
+                    .join("")}
+                </div>
+              `
+              : ""
+          }
+        </div>
         <div class="toolbar-action">
           <button class="view-toggle-button" id="viewToggleButton" type="button" aria-label="${
             state.viewMode === "grid" ? "Prebaci na listu" : "Prebaci na kartice"
@@ -341,6 +513,16 @@ function bindEvents(): void {
     document.querySelector<HTMLButtonElement>("#uploadButton");
   const viewToggleButton =
     document.querySelector<HTMLButtonElement>("#viewToggleButton");
+  const sortButton = document.querySelector<HTMLButtonElement>("#sortButton");
+  const selectionButton =
+    document.querySelector<HTMLButtonElement>("#selectionButton");
+  const selectAllButton =
+    document.querySelector<HTMLButtonElement>("#selectAllButton");
+  const selectableCards =
+    document.querySelectorAll<HTMLElement>("[data-select-card]");
+  const sortMenu = document.querySelector<HTMLElement>("#sortMenu");
+  const sortOptionButtons =
+    document.querySelectorAll<HTMLButtonElement>("[data-sort-mode]");
   const browseButton =
     document.querySelector<HTMLButtonElement>("#browseButton");
   const dropZone = document.querySelector<HTMLElement>("#dropZone");
@@ -358,12 +540,124 @@ function bindEvents(): void {
 
   const openPicker = () => fileInput.click();
   uploadButton.addEventListener("click", openPicker);
+  sortButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    state.sortMenuOpen = !state.sortMenuOpen;
+    if (state.sortMenuOpen) {
+      window.setTimeout(() => {
+        document.addEventListener("click", handleSortMenuOutsideClick, {
+          once: true,
+        });
+      }, 0);
+    }
+    render();
+  });
+  selectionButton?.addEventListener("click", () => {
+    const nextSelectionMode = !state.selectionMode;
+    state.selectionMode = nextSelectionMode;
+    state.selectionAnimation = state.selectionMode ? "animate-on" : "animate-off";
+    saveStoredSelectionMode(state.selectionMode);
+    if (nextSelectionMode) {
+      reconcileSelectionState();
+      state.selectionToolsVisible = true;
+      state.selectionToolsAnimation = "selection-tools-enter";
+    } else {
+      state.selectionToolsAnimation = "selection-tools-exit";
+      state.selectAllMode = false;
+      state.selectedTowKods = [];
+      state.selectionPulseTowKods = [];
+      saveStoredSelectAllMode(false);
+      saveStoredSelectedTowKods([]);
+      window.setTimeout(() => {
+        state.selectionToolsVisible = false;
+        state.selectionToolsAnimation = "";
+        render();
+      }, 280);
+    }
+    render();
+    window.setTimeout(() => {
+      state.selectionAnimation = "";
+      if (state.selectionToolsAnimation === "selection-tools-enter") {
+        state.selectionToolsAnimation = "";
+      }
+      render();
+    }, 320);
+  });
+  selectAllButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const selectableTowKods = getSelectableTowKods(state.data.items);
+    if (selectableTowKods.length === 0) {
+      state.selectAllMode = false;
+      state.selectedTowKods = [];
+      saveStoredSelectAllMode(false);
+      saveStoredSelectedTowKods([]);
+      render();
+      return;
+    }
+
+    const shouldSelectAll = !state.selectAllMode;
+    const previouslySelected = new Set(state.selectedTowKods);
+    state.selectAllMode = shouldSelectAll;
+    state.selectedTowKods = shouldSelectAll ? selectableTowKods : [];
+    state.selectionPulseTowKods = shouldSelectAll
+      ? selectableTowKods.filter((towKod) => !previouslySelected.has(towKod))
+      : [];
+    saveStoredSelectAllMode(state.selectAllMode);
+    saveStoredSelectedTowKods(state.selectedTowKods);
+    render();
+    if (state.selectionPulseTowKods.length > 0) {
+      window.setTimeout(() => {
+        state.selectionPulseTowKods = [];
+        render();
+      }, 240);
+    }
+  });
+  for (const card of selectableCards) {
+    card.addEventListener("click", (event) => {
+      if (!state.selectionMode) {
+        return;
+      }
+
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest("button, a, input, textarea, select, label")
+      ) {
+        return;
+      }
+
+      const towKod = card.dataset.selectCard;
+      if (!towKod) {
+        return;
+      }
+
+      toggleTowKodSelection(towKod);
+      render();
+    });
+  }
   viewToggleButton?.addEventListener("click", () => {
     state.viewMode = state.viewMode === "grid" ? "list" : "grid";
     saveViewMode(state.viewMode);
     render();
   });
+  sortMenu?.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
   browseButton?.addEventListener("click", openPicker);
+
+  for (const button of sortOptionButtons) {
+    button.addEventListener("click", () => {
+      const nextSortMode = button.dataset.sortMode as SortMode | undefined;
+      if (!nextSortMode) {
+        return;
+      }
+
+      state.sortMode = nextSortMode;
+      state.sortMenuOpen = false;
+      saveSortMode(nextSortMode);
+      render();
+    });
+  }
 
   fileInput.addEventListener("change", async () => {
     const files = fileInput.files ? Array.from(fileInput.files) : [];
@@ -412,6 +706,7 @@ function bindEvents(): void {
 
       state.data = data as CatalogState;
       state.imageIndexes = {};
+      reconcileSelectionState();
       state.message = "Sve je obrisano.";
       state.messageTone = "success";
     } catch (error) {
@@ -488,6 +783,7 @@ async function loadState(): Promise<void> {
 
     state.data = data as CatalogState;
     state.imageIndexes = {};
+    reconcileSelectionState();
     if (state.data.totalItems > 0) {
       state.message = "Artikli su ucitani.";
       state.messageTone = "success";
@@ -548,11 +844,13 @@ async function uploadFiles(files: File[]): Promise<void> {
         state.imageIndexes[imageKey] = 0;
       }
     }
+    reconcileSelectionState();
     state.animateItemsIn = true;
     state.message = "Artikli su dodati.";
     state.messageTone = "success";
     window.setTimeout(() => {
       state.animateItemsIn = false;
+      render();
     }, 220);
   } catch (error) {
     state.message =
@@ -596,6 +894,153 @@ function loadStoredViewMode(): "grid" | "list" {
 
 function saveViewMode(value: "grid" | "list"): void {
   window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, value);
+}
+
+function handleSortMenuOutsideClick(): void {
+  if (!state.sortMenuOpen) {
+    return;
+  }
+
+  state.sortMenuOpen = false;
+  render();
+}
+
+function loadSessionSelectionMode(): boolean {
+  return window.sessionStorage.getItem(SELECTION_MODE_STORAGE_KEY) === "true";
+}
+
+function saveStoredSelectionMode(value: boolean): void {
+  window.sessionStorage.setItem(SELECTION_MODE_STORAGE_KEY, String(value));
+}
+
+function loadStoredSelectAllMode(): boolean {
+  return window.localStorage.getItem(SELECT_ALL_STORAGE_KEY) === "true";
+}
+
+function saveStoredSelectAllMode(value: boolean): void {
+  window.localStorage.setItem(SELECT_ALL_STORAGE_KEY, String(value));
+}
+
+function loadStoredSelectedTowKods(): string[] {
+  const rawValue = window.localStorage.getItem(SELECTED_TOWKODS_STORAGE_KEY);
+  if (!rawValue) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string => typeof value === "string" && value.length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredSelectedTowKods(values: string[]): void {
+  window.localStorage.setItem(
+    SELECTED_TOWKODS_STORAGE_KEY,
+    JSON.stringify(values),
+  );
+}
+
+function getSelectableTowKods(items: CatalogItem[]): string[] {
+  return items
+    .map((item) => item.towKod)
+    .filter((towKod): towKod is string => Boolean(towKod));
+}
+
+function reconcileSelectionState(): void {
+  const selectableTowKods = new Set(getSelectableTowKods(state.data.items));
+  state.selectedTowKods = state.selectedTowKods.filter((towKod) =>
+    selectableTowKods.has(towKod),
+  );
+  state.selectAllMode =
+    selectableTowKods.size > 0 &&
+    state.selectedTowKods.length === selectableTowKods.size;
+  saveStoredSelectedTowKods(state.selectedTowKods);
+  saveStoredSelectAllMode(state.selectAllMode);
+}
+
+function toggleTowKodSelection(towKod: string): void {
+  const isSelected = state.selectedTowKods.includes(towKod);
+  state.selectedTowKods = isSelected
+    ? state.selectedTowKods.filter((value) => value !== towKod)
+    : [...state.selectedTowKods, towKod];
+  state.selectionPulseTowKods = isSelected ? [] : [towKod];
+
+  const selectableTowKods = getSelectableTowKods(state.data.items);
+  state.selectAllMode =
+    selectableTowKods.length > 0 &&
+    state.selectedTowKods.length === selectableTowKods.length;
+  saveStoredSelectedTowKods(state.selectedTowKods);
+  saveStoredSelectAllMode(state.selectAllMode);
+  if (!isSelected) {
+    window.setTimeout(() => {
+      state.selectionPulseTowKods = state.selectionPulseTowKods.filter(
+        (value) => value !== towKod,
+      );
+      render();
+    }, 360);
+  }
+}
+
+function loadStoredSortMode(): SortMode {
+  const storedValue = window.localStorage.getItem(SORT_MODE_STORAGE_KEY);
+  return isSortMode(storedValue) ? storedValue : "price-asc";
+}
+
+function saveSortMode(value: SortMode): void {
+  window.localStorage.setItem(SORT_MODE_STORAGE_KEY, value);
+}
+
+function isSortMode(value: string | null): value is SortMode {
+  return (
+    value === "price-asc" ||
+    value === "price-desc" ||
+    value === "name" ||
+    value === "brand"
+  );
+}
+
+function sortItems(items: CatalogItem[], sortMode: SortMode): CatalogItem[] {
+  return [...items].sort((left, right) => compareCatalogItems(left, right, sortMode));
+}
+
+function compareCatalogItems(
+  left: CatalogItem,
+  right: CatalogItem,
+  sortMode: SortMode,
+): number {
+  switch (sortMode) {
+    case "price-asc":
+      return compareNumbers(left.retailPrice, right.retailPrice) || compareByName(left, right);
+    case "price-desc":
+      return compareNumbers(right.retailPrice, left.retailPrice) || compareByName(left, right);
+    case "brand":
+      return compareText(left.brandName, right.brandName) || compareByName(left, right);
+    case "name":
+      return compareByName(left, right);
+  }
+}
+
+function compareByName(left: CatalogItem, right: CatalogItem): number {
+  return compareText(left.nameB2B, right.nameB2B);
+}
+
+function compareNumbers(left: number, right: number): number {
+  const safeLeft = Number.isFinite(left) ? left : 0;
+  const safeRight = Number.isFinite(right) ? right : 0;
+  return safeLeft - safeRight;
+}
+
+function compareText(left: string, right: string): number {
+  const safeLeft = left?.trim() || "";
+  const safeRight = right?.trim() || "";
+  return safeLeft.localeCompare(safeRight, "sr-Latn", {
+    sensitivity: "base",
+    numeric: true,
+  });
 }
 
 function getEditTowKodFromPath(): string | null {
