@@ -1,5 +1,7 @@
 import "./style.css";
+import { mountCategoryPage } from "./category";
 import { mountEditPage } from "./edit";
+import { loadSessionInfo, renderSessionBadge } from "./session";
 import { mountPageTransition, navigateWithFade } from "./transition";
 
 type CatalogImage = {
@@ -23,6 +25,12 @@ type CatalogItem = {
   retailPrice: number;
   currencyCode: string;
   sourceFileName?: string;
+  categorization?: {
+    category?: {
+      id: number;
+      name: string;
+    };
+  };
 };
 
 type UploadedCatalog = {
@@ -68,6 +76,8 @@ const state: {
   imageIndexes: Record<string, number>;
   viewMode: "grid" | "list";
   animateItemsIn: boolean;
+  sessionUsername: string;
+  tokenConfigured: boolean;
 } = {
   data: {
     catalogs: [],
@@ -84,6 +94,8 @@ const state: {
   imageIndexes: {},
   viewMode: loadStoredViewMode(),
   animateItemsIn: false,
+  sessionUsername: "",
+  tokenConfigured: false,
 };
 
 const plusIcon = `
@@ -159,6 +171,12 @@ function render(): void {
     return;
   }
 
+  const categoryTowKod = getCategoryTowKodFromPath();
+  if (categoryTowKod) {
+    mountCategoryPage(root, categoryTowKod);
+    return;
+  }
+
   const hasItems = state.data.items.length > 0;
 
   const cards = state.data.items
@@ -173,6 +191,7 @@ function render(): void {
         item.retailPrice > 0
           ? `${formatPriceValue(item.retailPrice)} ${escapeHtml(formatCurrencyCode(item.currencyCode || "EUR"))}`
           : "Na upit";
+      const hasCategorization = Boolean(item.categorization?.category?.id);
 
       return `
         <article class="product-card ${state.viewMode === "list" ? "list-mode" : ""}">
@@ -214,7 +233,7 @@ function render(): void {
             <div class="product-line bottom">
               <strong>${price}</strong>
               <div class="card-actions">
-                <button class="icon-button" type="button" aria-label="Kategorizacija">
+                <button class="icon-button ${hasCategorization ? "category-button-complete" : "category-button-missing"}" type="button" aria-label="Kategorizacija" data-category-code="${escapeHtml(item.towKod)}">
                   ${categorizeIcon}
                 </button>
                 <button class="icon-button" type="button" aria-label="Promjeni" data-edit-code="${escapeHtml(item.towKod)}">
@@ -234,6 +253,7 @@ function render(): void {
         <div class="logo-wrap">
           <div class="logo-mark">IC</div>
           <strong>ICAI</strong>
+          ${renderSessionBadge(state.tokenConfigured ? { tokenConfigured: true, username: state.sessionUsername, fullName: "" } : null)}
         </div>
         <div class="header-actions">
         <div class="toolbar-action">
@@ -329,6 +349,8 @@ function bindEvents(): void {
     document.querySelectorAll<HTMLButtonElement>("[data-image-nav]");
   const editButtons =
     document.querySelectorAll<HTMLButtonElement>("[data-edit-code]");
+  const categoryButtons =
+    document.querySelectorAll<HTMLButtonElement>("[data-category-code]");
 
   if (!fileInput || !uploadButton || !clearButton) {
     return;
@@ -438,10 +460,25 @@ function bindEvents(): void {
       navigateWithFade(root, `/edit/${encodeURIComponent(code)}`);
     });
   }
+
+  for (const button of categoryButtons) {
+    button.addEventListener("click", () => {
+      const code = button.dataset.categoryCode;
+      if (!code) {
+        return;
+      }
+
+      navigateWithFade(root, `/category/${encodeURIComponent(code)}`);
+    });
+  }
 }
 
 async function loadState(): Promise<void> {
   try {
+    const session = await loadSessionInfo();
+    state.sessionUsername = session.username || "";
+    state.tokenConfigured = session.tokenConfigured;
+
     const response = await fetch("/api/catalog");
     const data = (await response.json()) as CatalogResponse;
 
@@ -574,11 +611,29 @@ function getEditTowKodFromPath(): string | null {
   }
 }
 
+function getCategoryTowKodFromPath(): string | null {
+  const match = window.location.pathname.match(/^\/category\/(.+)$/);
+  if (!match) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
 const editTowKod = getEditTowKodFromPath();
 if (editTowKod) {
   mountEditPage(root, editTowKod);
 } else {
-  void loadState();
+  const categoryTowKod = getCategoryTowKodFromPath();
+  if (categoryTowKod) {
+    mountCategoryPage(root, categoryTowKod);
+  } else {
+    void loadState();
+  }
 }
 
 window.addEventListener("pageshow", () => {

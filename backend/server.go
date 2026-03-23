@@ -16,9 +16,10 @@ import (
 )
 
 type App struct {
-	store   *CatalogStore
-	server  *http.Server
-	distDir string
+	store         *CatalogStore
+	server        *http.Server
+	distDir       string
+	olxCategories *OLXCategoryService
 }
 
 func NewApp() (*App, error) {
@@ -29,6 +30,8 @@ func NewApp() (*App, error) {
 
 	exeDir := filepath.Dir(exePath)
 	distDir := filepath.Join(exeDir, "dist")
+	workDir, _ := os.Getwd()
+	projectDir := filepath.Dir(exeDir)
 
 	if _, err := os.Stat(distDir); os.IsNotExist(err) {
 		return nil, errors.New("dist folder nije pronađen: " + distDir)
@@ -42,6 +45,14 @@ func NewApp() (*App, error) {
 	app := &App{
 		store:   store,
 		distDir: distDir,
+		olxCategories: NewOLXCategoryService([]string{
+			exeDir,
+			filepath.Join(exeDir, "backend"),
+			projectDir,
+			filepath.Join(projectDir, "backend"),
+			workDir,
+			filepath.Join(workDir, "backend"),
+		}),
 	}
 
 	mux := http.NewServeMux()
@@ -67,6 +78,18 @@ func (a *App) Run() error {
 		time.Sleep(700 * time.Millisecond)
 		openBrowser("http://localhost:8080")
 	}()
+
+	if a.olxCategories != nil && a.olxCategories.HasToken() {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+
+		if err := a.olxCategories.LoadMe(ctx); err != nil {
+			log.Printf("OLX /me nije uspeo: %v", err)
+		} else {
+			session := a.olxCategories.SessionInfo()
+			log.Printf("Prijavljen si kao %s", session.Username)
+		}
+	}
 
 	log.Printf("App running on http://localhost:8080")
 	log.Printf("Temp folder: %s", a.store.TempDir())
@@ -101,6 +124,9 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("/api/catalog/item/", a.handleCatalogItem)
+	mux.HandleFunc("/api/category/item/", a.handleCategoryItem)
+	mux.HandleFunc("/api/olx/", a.handleOLXCategories)
+	mux.HandleFunc("/api/session", a.handleSessionInfo)
 
 	fileServer := http.FileServer(http.Dir(a.distDir))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

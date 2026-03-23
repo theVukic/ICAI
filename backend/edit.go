@@ -13,7 +13,7 @@ import (
 var errCatalogItemNotFound = errors.New("artikal nije pronađen")
 
 func (a *App) handleCatalogItem(w http.ResponseWriter, r *http.Request) {
-	towKod, err := itemCodeFromPath(r.URL.Path)
+	towKod, err := itemCodeFromPath(strings.TrimPrefix(r.URL.Path, "/api/catalog/item"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -55,7 +55,7 @@ func (a *App) handleCatalogItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func itemCodeFromPath(path string) (string, error) {
-	const prefix = "/api/catalog/item/"
+	const prefix = "/"
 
 	if !strings.HasPrefix(path, prefix) {
 		return "", fmt.Errorf("neispravna putanja")
@@ -82,6 +82,10 @@ func (s *CatalogStore) GetItemByTowKod(towKod string) (CatalogItem, error) {
 	for _, catalog := range s.catalogs {
 		for _, item := range catalog.Items {
 			if item.TowKod == towKod {
+				if categorization, ok := s.categorizations[towKod]; ok {
+					copied := categorization
+					item.Categorization = &copied
+				}
 				return item, nil
 			}
 		}
@@ -146,6 +150,7 @@ func (s *CatalogStore) writeCatalogFile(catalog UploadedCatalog) error {
 			payload.Items[itemIndex].NameB2B = currentItem.NameB2B
 			payload.Items[itemIndex].RetailPrice = currentItem.RetailPrice
 			payload.Items[itemIndex].TechnicalDescription = currentItem.TechnicalDescription
+			payload.Items[itemIndex].Categorization = currentItem.Categorization
 			updated = true
 			break
 		}

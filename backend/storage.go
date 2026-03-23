@@ -13,9 +13,10 @@ import (
 )
 
 type CatalogStore struct {
-	mu       sync.RWMutex
-	tempDir  string
-	catalogs []UploadedCatalog
+	mu              sync.RWMutex
+	tempDir         string
+	catalogs        []UploadedCatalog
+	categorizations map[string]ItemCategorySelection
 }
 
 func NewCatalogStore() (*CatalogStore, error) {
@@ -25,8 +26,9 @@ func NewCatalogStore() (*CatalogStore, error) {
 	}
 
 	return &CatalogStore{
-		tempDir:  tempDir,
-		catalogs: []UploadedCatalog{},
+		tempDir:         tempDir,
+		catalogs:        []UploadedCatalog{},
+		categorizations: map[string]ItemCategorySelection{},
 	}, nil
 }
 
@@ -54,6 +56,10 @@ func (s *CatalogStore) State() CatalogState {
 				continue
 			}
 			seen[key] = struct{}{}
+			if categorization, ok := s.categorizations[item.TowKod]; ok {
+				copied := categorization
+				item.Categorization = &copied
+			}
 			items = append(items, item)
 		}
 
@@ -138,6 +144,7 @@ func (s *CatalogStore) Clear() error {
 				return fmt.Errorf("nije moguće ponovo kreirati temp folder: %w", mkdirErr)
 			}
 			s.catalogs = []UploadedCatalog{}
+			s.categorizations = map[string]ItemCategorySelection{}
 			return nil
 		}
 		return fmt.Errorf("nije moguće pročitati temp folder: %w", err)
@@ -151,7 +158,40 @@ func (s *CatalogStore) Clear() error {
 	}
 
 	s.catalogs = []UploadedCatalog{}
+	s.categorizations = map[string]ItemCategorySelection{}
 	return nil
+}
+
+func (s *CatalogStore) SaveCategorization(towKod string, selection ItemCategorySelection) (CatalogItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if selection.Category == nil || selection.Category.ID == 0 {
+		return CatalogItem{}, fmt.Errorf("kategorija je obavezna")
+	}
+
+	for catalogIndex := range s.catalogs {
+		catalog := &s.catalogs[catalogIndex]
+		for itemIndex := range catalog.Items {
+			if catalog.Items[itemIndex].TowKod != towKod {
+				continue
+			}
+
+			copied := selection
+			s.categorizations[towKod] = selection
+			catalog.Items[itemIndex].Categorization = &copied
+
+			if err := s.writeCatalogFile(*catalog); err != nil {
+				return CatalogItem{}, err
+			}
+
+			itemCopy := catalog.Items[itemIndex]
+			itemCopy.Categorization = &copied
+			return itemCopy, nil
+		}
+	}
+
+	return CatalogItem{}, fmt.Errorf("%w: %s", errCatalogItemNotFound, towKod)
 }
 
 func (s *CatalogStore) Cleanup() error {
