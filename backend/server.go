@@ -100,6 +100,8 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 		a.handleCatalogUpload(w, r)
 	})
 
+	mux.HandleFunc("/api/catalog/item/", a.handleCatalogItem)
+
 	fileServer := http.FileServer(http.Dir(a.distDir))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")

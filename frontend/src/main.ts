@@ -1,4 +1,6 @@
 import "./style.css";
+import { mountEditPage } from "./edit";
+import { mountPageTransition, navigateWithFade } from "./transition";
 
 type CatalogImage = {
   position: number;
@@ -46,6 +48,8 @@ type ErrorResponse = {
 
 type CatalogResponse = CatalogState | ErrorResponse;
 
+const VIEW_MODE_STORAGE_KEY = "icaiapp:view-mode";
+
 const app = document.querySelector<HTMLDivElement>("#app");
 
 if (!app) {
@@ -53,6 +57,7 @@ if (!app) {
 }
 
 const root = app;
+mountPageTransition(root);
 
 const state: {
   data: CatalogState;
@@ -62,6 +67,7 @@ const state: {
   messageTone: "muted" | "success" | "danger";
   imageIndexes: Record<string, number>;
   viewMode: "grid" | "list";
+  animateItemsIn: boolean;
 } = {
   data: {
     catalogs: [],
@@ -76,7 +82,8 @@ const state: {
   message: "Prevuci JSON fajl ili klikni na Dodaj jos.",
   messageTone: "muted",
   imageIndexes: {},
-  viewMode: "grid",
+  viewMode: loadStoredViewMode(),
+  animateItemsIn: false,
 };
 
 const plusIcon = `
@@ -146,6 +153,12 @@ const categorizeIcon = `
 `;
 
 function render(): void {
+  const editTowKod = getEditTowKodFromPath();
+  if (editTowKod) {
+    mountEditPage(root, editTowKod);
+    return;
+  }
+
   const hasItems = state.data.items.length > 0;
 
   const cards = state.data.items
@@ -158,11 +171,7 @@ function render(): void {
       const image = item.images[currentImageIndex]?.url ?? "";
       const price =
         item.retailPrice > 0
-          ? new Intl.NumberFormat("sr-Latn-RS", {
-              style: "currency",
-              currency: item.currencyCode || "EUR",
-              maximumFractionDigits: 2,
-            }).format(item.retailPrice)
+          ? `${formatPriceValue(item.retailPrice)} ${escapeHtml(formatCurrencyCode(item.currencyCode || "EUR"))}`
           : "Na upit";
 
       return `
@@ -208,7 +217,7 @@ function render(): void {
                 <button class="icon-button" type="button" aria-label="Kategorizacija">
                   ${categorizeIcon}
                 </button>
-                <button class="icon-button" type="button" aria-label="Promjeni">
+                <button class="icon-button" type="button" aria-label="Promjeni" data-edit-code="${escapeHtml(item.towKod)}">
                   ${editIcon}
                 </button>
               </div>
@@ -257,7 +266,7 @@ function render(): void {
         ${
           hasItems
             ? `
-              <section class="products-grid ${state.viewMode === "list" ? "list-view" : ""}">
+              <section class="products-grid ${state.viewMode === "list" ? "list-view" : ""} ${state.animateItemsIn ? "products-grid-animated" : ""}">
                 ${cards}
               </section>
             `
@@ -318,6 +327,8 @@ function bindEvents(): void {
   const clearButton = document.querySelector<HTMLButtonElement>("#clearButton");
   const imageButtons =
     document.querySelectorAll<HTMLButtonElement>("[data-image-nav]");
+  const editButtons =
+    document.querySelectorAll<HTMLButtonElement>("[data-edit-code]");
 
   if (!fileInput || !uploadButton || !clearButton) {
     return;
@@ -327,6 +338,7 @@ function bindEvents(): void {
   uploadButton.addEventListener("click", openPicker);
   viewToggleButton?.addEventListener("click", () => {
     state.viewMode = state.viewMode === "grid" ? "list" : "grid";
+    saveViewMode(state.viewMode);
     render();
   });
   browseButton?.addEventListener("click", openPicker);
@@ -415,6 +427,17 @@ function bindEvents(): void {
       render();
     });
   }
+
+  for (const button of editButtons) {
+    button.addEventListener("click", () => {
+      const code = button.dataset.editCode;
+      if (!code) {
+        return;
+      }
+
+      navigateWithFade(root, `/edit/${encodeURIComponent(code)}`);
+    });
+  }
 }
 
 async function loadState(): Promise<void> {
@@ -439,6 +462,14 @@ async function loadState(): Promise<void> {
   } finally {
     render();
   }
+}
+
+function refreshMainPageFromStore(): void {
+  if (getEditTowKodFromPath()) {
+    return;
+  }
+
+  void loadState();
 }
 
 async function uploadFiles(files: File[]): Promise<void> {
@@ -480,8 +511,12 @@ async function uploadFiles(files: File[]): Promise<void> {
         state.imageIndexes[imageKey] = 0;
       }
     }
+    state.animateItemsIn = true;
     state.message = "Artikli su dodati.";
     state.messageTone = "success";
+    window.setTimeout(() => {
+      state.animateItemsIn = false;
+    }, 220);
   } catch (error) {
     state.message =
       error instanceof Error ? error.message : "Upload nije uspeo.";
@@ -501,4 +536,55 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-void loadState();
+function formatPriceValue(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "0";
+  }
+
+  if (Number.isInteger(value)) {
+    return String(value);
+  }
+
+  return value.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function formatCurrencyCode(value: string): string {
+  return value === "BAM" ? "KM" : value;
+}
+
+function loadStoredViewMode(): "grid" | "list" {
+  const storedValue = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+  return storedValue === "list" ? "list" : "grid";
+}
+
+function saveViewMode(value: "grid" | "list"): void {
+  window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, value);
+}
+
+function getEditTowKodFromPath(): string | null {
+  const match = window.location.pathname.match(/^\/edit\/(.+)$/);
+  if (!match) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+const editTowKod = getEditTowKodFromPath();
+if (editTowKod) {
+  mountEditPage(root, editTowKod);
+} else {
+  void loadState();
+}
+
+window.addEventListener("pageshow", () => {
+  refreshMainPageFromStore();
+});
+
+window.addEventListener("focus", () => {
+  refreshMainPageFromStore();
+});
