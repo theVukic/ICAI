@@ -16,10 +16,11 @@ import (
 )
 
 type App struct {
-	store         *CatalogStore
-	server        *http.Server
-	distDir       string
-	olxCategories *OLXCategoryService
+	store          *CatalogStore
+	server         *http.Server
+	distDir        string
+	descriptionDir string
+	olxCategories  *OLXCategoryService
 }
 
 func NewApp() (*App, error) {
@@ -43,8 +44,9 @@ func NewApp() (*App, error) {
 	}
 
 	app := &App{
-		store:   store,
-		distDir: distDir,
+		store:          store,
+		distDir:        distDir,
+		descriptionDir: resolveDescriptionDir([]string{filepath.Join(workDir, "description"), filepath.Join(projectDir, "description"), filepath.Join(exeDir, "description")}),
 		olxCategories: NewOLXCategoryService([]string{
 			exeDir,
 			filepath.Join(exeDir, "backend"),
@@ -123,8 +125,11 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 		a.handleCatalogUpload(w, r)
 	})
 
+	mux.HandleFunc("/api/catalog/bulk-delete", a.handleCatalogBulkDelete)
 	mux.HandleFunc("/api/catalog/bulk-edit", a.handleCatalogBulkEdit)
 	mux.HandleFunc("/api/catalog/item/", a.handleCatalogItem)
+	mux.HandleFunc("/api/description/render/", a.handleDescriptionRender)
+	mux.HandleFunc("/api/description", a.handleDescription)
 	mux.HandleFunc("/api/category/bulk", a.handleCategoryBulk)
 	mux.HandleFunc("/api/category/item/", a.handleCategoryItem)
 	mux.HandleFunc("/api/olx/", a.handleOLXCategories)
@@ -176,4 +181,28 @@ func openBrowser(url string) {
 	}
 
 	_ = cmd.Start()
+}
+
+func resolveDescriptionDir(candidates []string) string {
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate) == "" {
+			continue
+		}
+
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate) == "" {
+			continue
+		}
+
+		if err := os.MkdirAll(candidate, 0o755); err == nil {
+			return candidate
+		}
+	}
+
+	return filepath.Join(".", "description")
 }

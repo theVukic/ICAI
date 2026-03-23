@@ -63,11 +63,15 @@ type CatalogItemEditRequest struct {
 }
 
 type CatalogBulkEditRequest struct {
-	TowKods      []string  `json:"towKods"`
-	Name         *string   `json:"name,omitempty"`
-	Price        *float64  `json:"price,omitempty"`
-	Description  *string   `json:"description,omitempty"`
-	CurrencyCode *string   `json:"currencyCode,omitempty"`
+	TowKods      []string `json:"towKods"`
+	Name         *string  `json:"name,omitempty"`
+	Price        *float64 `json:"price,omitempty"`
+	Description  *string  `json:"description,omitempty"`
+	CurrencyCode *string  `json:"currencyCode,omitempty"`
+}
+
+type CatalogBulkDeleteRequest struct {
+	TowKods []string `json:"towKods"`
 }
 
 type ItemCategorySelection struct {
@@ -148,4 +152,21 @@ type SessionInfoResponse struct {
 	TokenConfigured bool   `json:"tokenConfigured"`
 	Username        string `json:"username"`
 	FullName        string `json:"fullName"`
+	ProfileName     string `json:"profileName,omitempty"`
+}
+
+type DescriptionDocument struct {
+	ProfileName string     `json:"profileName"`
+	Content     string     `json:"content"`
+	UpdatedAt   *time.Time `json:"updatedAt,omitempty"`
+}
+
+type DescriptionSaveRequest struct {
+	Content string `json:"content"`
+}
+
+type DescriptionRenderResponse struct {
+	ProfileName string `json:"profileName"`
+	TowKod      string `json:"towKod"`
+	Content     string `json:"content"`
 }

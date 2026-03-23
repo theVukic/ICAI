@@ -20,10 +20,19 @@ const olxBaseURL = "https://api.olx.ba"
 type OLXCategoryService struct {
 	httpClient *http.Client
 	token      string
+	tokenName  string
 	me         SessionInfoResponse
 }
 
 type tokenFilePayload struct {
+	Name       string           `json:"name"`
+	Token      string           `json:"token"`
+	ActiveName string           `json:"activeName"`
+	Tokens     []namedTokenFile `json:"tokens"`
+}
+
+type namedTokenFile struct {
+	Name  string `json:"name"`
 	Token string `json:"token"`
 }
 
@@ -39,9 +48,11 @@ type olxMeResponse struct {
 }
 
 func NewOLXCategoryService(searchRoots []string) *OLXCategoryService {
+	tokenName, token := loadOLXTokenConfig(searchRoots)
 	return &OLXCategoryService{
 		httpClient: &http.Client{Timeout: 12 * time.Second},
-		token:      loadOLXToken(searchRoots),
+		token:      token,
+		tokenName:  tokenName,
 	}
 }
 
@@ -59,7 +70,24 @@ func (s *OLXCategoryService) SessionInfo() SessionInfoResponse {
 	if strings.TrimSpace(response.Username) == "" {
 		response.Username = "Nepoznato"
 	}
+	if strings.TrimSpace(response.ProfileName) == "" {
+		response.ProfileName = s.ActiveProfileName()
+	}
 	return response
+}
+
+func (s *OLXCategoryService) ActiveProfileName() string {
+	if strings.TrimSpace(s.tokenName) != "" {
+		return strings.TrimSpace(s.tokenName)
+	}
+	if strings.TrimSpace(s.me.Username) != "" {
+		return strings.TrimSpace(s.me.Username)
+	}
+	if strings.TrimSpace(s.me.ProfileName) != "" &&
+		!strings.EqualFold(strings.TrimSpace(s.me.ProfileName), "default") {
+		return strings.TrimSpace(s.me.ProfileName)
+	}
+	return "default"
 }
 
 func (s *OLXCategoryService) LoadMe(ctx context.Context) error {
@@ -97,6 +125,7 @@ func (s *OLXCategoryService) LoadMe(ctx context.Context) error {
 			TokenConfigured: true,
 			Username:        direct.Username,
 			FullName:        strings.TrimSpace(direct.FirstName + " " + direct.LastName),
+			ProfileName:     firstNonEmpty(strings.TrimSpace(s.tokenName), strings.TrimSpace(direct.Username), "default"),
 		}
 		return nil
 	}
@@ -107,6 +136,7 @@ func (s *OLXCategoryService) LoadMe(ctx context.Context) error {
 			TokenConfigured: true,
 			Username:        wrapped.Data.Username,
 			FullName:        strings.TrimSpace(wrapped.Data.FirstName + " " + wrapped.Data.LastName),
+			ProfileName:     firstNonEmpty(strings.TrimSpace(s.tokenName), strings.TrimSpace(wrapped.Data.Username), "default"),
 		}
 		return nil
 	}
@@ -207,9 +237,9 @@ func (s *OLXCategoryService) getJSON(ctx context.Context, requestURL string, des
 	return nil
 }
 
-func loadOLXToken(searchRoots []string) string {
+func loadOLXTokenConfig(searchRoots []string) (string, string) {
 	if envToken := strings.TrimSpace(os.Getenv("OLX_BEARER_TOKEN")); envToken != "" {
-		return envToken
+		return strings.TrimSpace(os.Getenv("OLX_TOKEN_NAME")), envToken
 	}
 
 	for _, root := range searchRoots {
@@ -225,12 +255,50 @@ func loadOLXToken(searchRoots []string) string {
 
 		var payload tokenFilePayload
 		if err := json.Unmarshal(content, &payload); err != nil {
+			var entries []namedTokenFile
+			if arrayErr := json.Unmarshal(content, &entries); arrayErr != nil {
+				continue
+			}
+			payload.Tokens = entries
+		}
+
+		if token := strings.TrimSpace(payload.Token); token != "" {
+			return strings.TrimSpace(payload.Name), strings.TrimPrefix(token, "Bearer ")
+		}
+
+		if len(payload.Tokens) == 0 {
 			continue
 		}
 
-		token := strings.TrimSpace(payload.Token)
-		if token != "" {
-			return strings.TrimPrefix(token, "Bearer ")
+		if activeName := strings.TrimSpace(payload.ActiveName); activeName != "" {
+			for _, entry := range payload.Tokens {
+				if !strings.EqualFold(strings.TrimSpace(entry.Name), activeName) {
+					continue
+				}
+
+				token := strings.TrimSpace(entry.Token)
+				if token != "" {
+					return strings.TrimSpace(entry.Name), strings.TrimPrefix(token, "Bearer ")
+				}
+			}
+		}
+
+		for _, entry := range payload.Tokens {
+			token := strings.TrimSpace(entry.Token)
+			if token == "" {
+				continue
+			}
+			return strings.TrimSpace(entry.Name), strings.TrimPrefix(token, "Bearer ")
+		}
+	}
+
+	return "", ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
 		}
 	}
 

@@ -98,6 +98,7 @@ const state: {
   selectionToolsAnimation: "" | "selection-tools-enter" | "selection-tools-exit";
   selectAllMode: boolean;
   selectedTowKods: string[];
+  isDeletingSelected: boolean;
   selectionPulseTowKods: string[];
   animateItemsIn: boolean;
   sessionUsername: string;
@@ -125,6 +126,7 @@ const state: {
   selectionToolsAnimation: "",
   selectAllMode: loadStoredSelectAllMode(),
   selectedTowKods: loadStoredSelectedTowKods(),
+  isDeletingSelected: false,
   selectionPulseTowKods: [],
   animateItemsIn: false,
   sessionUsername: "",
@@ -243,6 +245,16 @@ const categorySelectedIcon = `
     <path d="M5 22H7c2 0 3-1 3-3V17c0-2-1-3-3-3H5c-2 0-3 1-3 3v2c0 2 1 3 3 3z" stroke="#F3F6FB" fill="none" stroke-width="1.8px"></path>
     <path d="M6 10c2.209 0 4-1.791 4-4S8.209 2 6 2 2 3.791 2 6s1.791 4 4 4z" opacity="0.34" stroke="#F3F6FB" fill="none" stroke-width="1.8px"></path>
     <path d="M18 22c2.209 0 4-1.791 4-4s-1.791-4-4-4-4 1.791-4 4 1.791 4 4 4z" opacity="0.34" stroke="#F3F6FB" fill="none" stroke-width="1.8px"></path>
+  </svg>
+`;
+
+const deleteSelectedIcon = `
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="24" height="24">
+    <path d="M9 3.75h6" />
+    <path d="M4.5 6.75h15" />
+    <path d="M7.5 6.75v11.25c0 .828.672 1.5 1.5 1.5h6c.828 0 1.5-.672 1.5-1.5V6.75" />
+    <path d="M10.5 10.5v5.25" />
+    <path d="M13.5 10.5v5.25" />
   </svg>
 `;
 
@@ -376,6 +388,18 @@ function render(): void {
                     <span class="button-icon">${editSelectedIcon}</span>
                   </button>
                   <span class="action-label action-label-toggle">PROMJENA</span>
+                </div>
+                <div class="toolbar-action">
+                  <button
+                    class="header-icon-button selected-action-button delete-selected-button"
+                    id="deleteSelectedButton"
+                    type="button"
+                    aria-label="Obrisi selektovane artikle"
+                    ${state.isDeletingSelected ? "disabled" : ""}
+                  >
+                    <span class="button-icon">${deleteSelectedIcon}</span>
+                  </button>
+                  <span class="action-label action-label-toggle">DELETE</span>
                 </div>
                 <div class="toolbar-action">
                   <button
@@ -534,6 +558,8 @@ function bindEvents(): void {
     document.querySelector<HTMLButtonElement>("#categorySelectedButton");
   const editSelectedButton =
     document.querySelector<HTMLButtonElement>("#editSelectedButton");
+  const deleteSelectedButton =
+    document.querySelector<HTMLButtonElement>("#deleteSelectedButton");
   const selectableCards =
     document.querySelectorAll<HTMLElement>("[data-select-card]");
   const sortMenu = document.querySelector<HTMLElement>("#sortMenu");
@@ -641,6 +667,50 @@ function bindEvents(): void {
     }
 
     navigateWithFade(root, "/category-selected");
+  });
+  deleteSelectedButton?.addEventListener("click", async () => {
+    if (state.selectedTowKods.length === 0 || state.isDeletingSelected) {
+      return;
+    }
+
+    state.isDeletingSelected = true;
+    state.message = "Brisem selektovane artikle...";
+    state.messageTone = "muted";
+    render();
+
+    try {
+      const response = await fetch("/api/catalog/bulk-delete", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          towKods: state.selectedTowKods,
+        }),
+      });
+
+      const data = (await response.json()) as CatalogResponse;
+      if (!response.ok) {
+        throw new Error("error" in data ? data.error : "Brisanje nije uspelo.");
+      }
+
+      state.data = data as CatalogState;
+      state.imageIndexes = filterImageIndexesByItems(state.imageIndexes, state.data.items);
+      state.selectedTowKods = [];
+      state.selectionPulseTowKods = [];
+      state.selectAllMode = false;
+      saveStoredSelectedTowKods([]);
+      saveStoredSelectAllMode(false);
+      state.message = "Selektovani artikli su obrisani.";
+      state.messageTone = "success";
+    } catch (error) {
+      state.message =
+        error instanceof Error ? error.message : "Brisanje nije uspelo.";
+      state.messageTone = "danger";
+    } finally {
+      state.isDeletingSelected = false;
+      render();
+    }
   });
   for (const card of selectableCards) {
     card.addEventListener("click", (event) => {
@@ -1013,6 +1083,19 @@ function toggleTowKodSelection(towKod: string): void {
       render();
     }, 360);
   }
+}
+
+function filterImageIndexesByItems(
+  imageIndexes: Record<string, number>,
+  items: CatalogItem[],
+): Record<string, number> {
+  const allowedKeys = new Set(
+    items.map((item) => item.towKod || item.index || item.nameB2B),
+  );
+
+  return Object.fromEntries(
+    Object.entries(imageIndexes).filter(([key]) => allowedKeys.has(key)),
+  );
 }
 
 function loadStoredSortMode(): SortMode {

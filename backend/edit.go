@@ -75,6 +75,26 @@ func (a *App) handleCatalogBulkEdit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
+func (a *App) handleCatalogBulkDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req CatalogBulkDeleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "neispravan JSON body")
+		return
+	}
+
+	if err := a.store.DeleteItemsBulk(req.TowKods); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, a.store.State())
+}
+
 func itemCodeFromPath(path string) (string, error) {
 	const prefix = "/"
 
@@ -161,25 +181,31 @@ func (s *CatalogStore) writeCatalogFile(catalog UploadedCatalog) error {
 		return fmt.Errorf("nije moguće parsirati temp fajl: %w", err)
 	}
 
-	updated := false
-	for itemIndex := range payload.Items {
-		for _, currentItem := range catalog.Items {
-			if payload.Items[itemIndex].TowKod != currentItem.TowKod {
-				continue
-			}
-
-			payload.Items[itemIndex].NameB2B = currentItem.NameB2B
-			payload.Items[itemIndex].RetailPrice = currentItem.RetailPrice
-			payload.Items[itemIndex].TechnicalDescription = currentItem.TechnicalDescription
-			payload.Items[itemIndex].Categorization = currentItem.Categorization
-			updated = true
-			break
-		}
+	currentItems := make(map[string]CatalogItem, len(catalog.Items))
+	for _, item := range catalog.Items {
+		currentItems[item.TowKod] = item
 	}
 
-	if !updated {
+	nextPayloadItems := make([]CatalogItem, 0, len(catalog.Items))
+	for itemIndex := range payload.Items {
+		currentItem, ok := currentItems[payload.Items[itemIndex].TowKod]
+		if !ok {
+			continue
+		}
+
+		payload.Items[itemIndex].NameB2B = currentItem.NameB2B
+		payload.Items[itemIndex].RetailPrice = currentItem.RetailPrice
+		payload.Items[itemIndex].TechnicalDescription = currentItem.TechnicalDescription
+		payload.Items[itemIndex].Categorization = currentItem.Categorization
+		nextPayloadItems = append(nextPayloadItems, payload.Items[itemIndex])
+	}
+
+	if len(nextPayloadItems) == 0 {
 		return fmt.Errorf("artikal nije pronađen u temp fajlu")
 	}
+
+	payload.Items = nextPayloadItems
+	payload.TotalItems = len(nextPayloadItems)
 
 	output, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
@@ -279,4 +305,68 @@ func (s *CatalogStore) UpdateItemsBulk(req CatalogBulkEditRequest) ([]CatalogIte
 	}
 
 	return updatedItems, nil
+}
+
+func (s *CatalogStore) DeleteItemsBulk(towKods []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	targets := make(map[string]struct{}, len(towKods))
+	for _, towKod := range towKods {
+		trimmed := strings.TrimSpace(towKod)
+		if trimmed == "" {
+			continue
+		}
+		targets[trimmed] = struct{}{}
+	}
+
+	if len(targets) == 0 {
+		return fmt.Errorf("odaberi barem jedan artikal")
+	}
+
+	nextCatalogs := make([]UploadedCatalog, 0, len(s.catalogs))
+	deletedCount := 0
+
+	for _, catalog := range s.catalogs {
+		filteredItems := make([]CatalogItem, 0, len(catalog.Items))
+		removedFromCatalog := false
+
+		for _, item := range catalog.Items {
+			if _, ok := targets[item.TowKod]; ok {
+				deletedCount++
+				removedFromCatalog = true
+				delete(targets, item.TowKod)
+				delete(s.categorizations, item.TowKod)
+				continue
+			}
+
+			filteredItems = append(filteredItems, item)
+		}
+
+		if !removedFromCatalog {
+			nextCatalogs = append(nextCatalogs, catalog)
+			continue
+		}
+
+		if len(filteredItems) == 0 {
+			if err := os.Remove(catalog.SavedPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("nije moguće obrisati temp fajl: %w", err)
+			}
+			continue
+		}
+
+		catalog.Items = filteredItems
+		catalog.TotalItems = len(filteredItems)
+		if err := s.writeCatalogFile(catalog); err != nil {
+			return err
+		}
+		nextCatalogs = append(nextCatalogs, catalog)
+	}
+
+	if deletedCount == 0 {
+		return fmt.Errorf("artikli nisu pronađeni")
+	}
+
+	s.catalogs = nextCatalogs
+	return nil
 }
