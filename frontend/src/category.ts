@@ -107,6 +107,16 @@ type OLXCategorySuggestion = {
   parent_categories?: string[];
 };
 
+type CachedCategorySelection = {
+  category: OLXCategoryNode;
+  attributes: OLXCategoryAttribute[];
+  brands: OLXBrand[];
+};
+
+const categoryPageCache = new Map<string, Promise<CategoryPageResponse> | CategoryPageResponse>();
+const categorySelectionCache = new Map<number, Promise<CachedCategorySelection> | CachedCategorySelection>();
+const categoryModelsCache = new Map<string, Promise<OLXModel[]> | OLXModel[]>();
+
 const state: {
   activeTowKod: string;
   item: CatalogItem | null;
@@ -183,21 +193,42 @@ function resetCategoryState(towKod: string): void {
   state.invalidFields = [];
 }
 
+export function prefetchCategoryPage(towKod: string): void {
+  if (!towKod) {
+    return;
+  }
+
+  void (async () => {
+    try {
+      const pageData = await getCategoryPageData(towKod);
+      const category = pageData.categorization?.category;
+      if (!category) {
+        return;
+      }
+
+      await getCategorySelectionData(category.id);
+
+      if (category.has_models && pageData.categorization?.brand?.id) {
+        await getCategoryModels(category.id, pageData.categorization.brand.id);
+      }
+    } catch {
+      // Ignore prefetch failures and let the normal page load surface any real error.
+    }
+  })();
+}
+
 async function loadCategoryPage(root: HTMLDivElement, towKod: string): Promise<void> {
-  state.loading = true;
-  renderCategoryPage(root, towKod);
+  const warmCache = hasWarmCategoryCache(towKod);
+  if (!warmCache) {
+    state.loading = true;
+    renderCategoryPage(root, towKod);
+  }
 
   try {
     const session = await loadSessionInfo();
     state.sessionUsername = session.username || "";
 
-    const response = await fetch(`/api/category/item/${encodeURIComponent(towKod)}`);
-    const data = (await response.json()) as CategoryPageResponse | ErrorResponse;
-    if (!response.ok) {
-      throw new Error("error" in data ? data.error : "Ucitavanje nije uspelo.");
-    }
-
-    const pageData = data as CategoryPageResponse;
+    const pageData = await getCategoryPageData(towKod);
     state.item = pageData.item;
     state.tokenConfigured = pageData.tokenConfigured;
     state.searchQuery =
@@ -762,36 +793,12 @@ async function selectCategory(
   state.attributeValues = state.attributeValues || {};
 
   try {
-    const [categoryResponse, attributesResponse] = await Promise.all([
-      fetch(`/api/olx/categories/${category.id}`),
-      fetch(`/api/olx/categories/${category.id}/attributes`),
-    ]);
+    const selectionData = await getCategorySelectionData(category.id);
 
-    const categoryData = (await categoryResponse.json()) as OLXCategoryNode | ErrorResponse;
-    const attributesData = (await attributesResponse.json()) as OLXCategoryAttribute[] | ErrorResponse;
-
-    if (!categoryResponse.ok) {
-      throw new Error("error" in categoryData ? categoryData.error : "Ucitavanje kategorije nije uspelo.");
-    }
-
-    if (!attributesResponse.ok) {
-      throw new Error("error" in attributesData ? attributesData.error : "Ucitavanje atributa nije uspelo.");
-    }
-
-    state.selectedCategory = categoryData as OLXCategoryNode;
-    state.attributes = attributesData as OLXCategoryAttribute[];
-    state.brands = [];
+    state.selectedCategory = selectionData.category;
+    state.attributes = selectionData.attributes;
+    state.brands = selectionData.brands;
     state.models = [];
-
-    if (state.selectedCategory.show_brand) {
-      const brandsResponse = await fetch(`/api/olx/categories/${category.id}/brands`);
-      const brandsData = (await brandsResponse.json()) as OLXBrand[] | ErrorResponse;
-      if (!brandsResponse.ok) {
-        throw new Error("error" in brandsData ? brandsData.error : "Ucitavanje brendova nije uspelo.");
-      }
-
-      state.brands = brandsData as OLXBrand[];
-    }
 
     if (state.selectedCategory.has_models && selectedBrandID) {
       await loadModels(category.id, selectedBrandID);
@@ -842,13 +849,160 @@ function validateCategorySelection(): { message: string; invalidFields: string[]
 }
 
 async function loadModels(categoryID: number, brandID: number): Promise<void> {
-  const response = await fetch(`/api/olx/categories/${categoryID}/brands/${brandID}/models`);
-  const data = (await response.json()) as OLXModel[] | ErrorResponse;
-  if (!response.ok) {
-    throw new Error("error" in data ? data.error : "Ucitavanje modela nije uspelo.");
+  state.models = await getCategoryModels(categoryID, brandID);
+}
+
+async function getCategoryPageData(towKod: string): Promise<CategoryPageResponse> {
+  const cached = categoryPageCache.get(towKod);
+  if (cached) {
+    return cached instanceof Promise ? cached : Promise.resolve(cached);
   }
 
-  state.models = data as OLXModel[];
+  const request = (async () => {
+    const response = await fetch(`/api/category/item/${encodeURIComponent(towKod)}`);
+    const data = (await response.json()) as CategoryPageResponse | ErrorResponse;
+    if (!response.ok) {
+      throw new Error("error" in data ? data.error : "Ucitavanje nije uspelo.");
+    }
+
+    const pageData = data as CategoryPageResponse;
+    categoryPageCache.set(towKod, pageData);
+    return pageData;
+  })();
+
+  categoryPageCache.set(towKod, request);
+
+  try {
+    return await request;
+  } catch (error) {
+    categoryPageCache.delete(towKod);
+    throw error;
+  }
+}
+
+async function getCategorySelectionData(categoryID: number): Promise<CachedCategorySelection> {
+  const cached = categorySelectionCache.get(categoryID);
+  if (cached) {
+    return cached instanceof Promise ? cached : Promise.resolve(cached);
+  }
+
+  const request = (async () => {
+    const [categoryResponse, attributesResponse] = await Promise.all([
+      fetch(`/api/olx/categories/${categoryID}`),
+      fetch(`/api/olx/categories/${categoryID}/attributes`),
+    ]);
+
+    const categoryData = (await categoryResponse.json()) as OLXCategoryNode | ErrorResponse;
+    const attributesData = (await attributesResponse.json()) as OLXCategoryAttribute[] | ErrorResponse;
+
+    if (!categoryResponse.ok) {
+      throw new Error("error" in categoryData ? categoryData.error : "Ucitavanje kategorije nije uspelo.");
+    }
+
+    if (!attributesResponse.ok) {
+      throw new Error("error" in attributesData ? attributesData.error : "Ucitavanje atributa nije uspelo.");
+    }
+
+    const resolvedCategory = categoryData as OLXCategoryNode;
+    let brands: OLXBrand[] = [];
+
+    if (resolvedCategory.show_brand) {
+      const brandsResponse = await fetch(`/api/olx/categories/${categoryID}/brands`);
+      const brandsData = (await brandsResponse.json()) as OLXBrand[] | ErrorResponse;
+      if (!brandsResponse.ok) {
+        throw new Error("error" in brandsData ? brandsData.error : "Ucitavanje brendova nije uspelo.");
+      }
+
+      brands = brandsData as OLXBrand[];
+    }
+
+    const resolved = {
+      category: resolvedCategory,
+      attributes: attributesData as OLXCategoryAttribute[],
+      brands,
+    };
+
+    categorySelectionCache.set(categoryID, resolved);
+    return resolved;
+  })();
+
+  categorySelectionCache.set(categoryID, request);
+
+  try {
+    return await request;
+  } catch (error) {
+    categorySelectionCache.delete(categoryID);
+    throw error;
+  }
+}
+
+async function getCategoryModels(categoryID: number, brandID: number): Promise<OLXModel[]> {
+  const cacheKey = `${categoryID}:${brandID}`;
+  const cached = categoryModelsCache.get(cacheKey);
+  if (cached) {
+    return cached instanceof Promise ? cached : Promise.resolve(cached);
+  }
+
+  const request = (async () => {
+    const response = await fetch(`/api/olx/categories/${categoryID}/brands/${brandID}/models`);
+    const data = (await response.json()) as OLXModel[] | ErrorResponse;
+    if (!response.ok) {
+      throw new Error("error" in data ? data.error : "Ucitavanje modela nije uspelo.");
+    }
+
+    const models = data as OLXModel[];
+    categoryModelsCache.set(cacheKey, models);
+    return models;
+  })();
+
+  categoryModelsCache.set(cacheKey, request);
+
+  try {
+    return await request;
+  } catch (error) {
+    categoryModelsCache.delete(cacheKey);
+    throw error;
+  }
+}
+
+function hasWarmCategoryCache(towKod: string): boolean {
+  const pageData = getResolvedCategoryPageData(towKod);
+  if (!pageData) {
+    return false;
+  }
+
+  const category = pageData.categorization?.category;
+  if (!category) {
+    return true;
+  }
+
+  const selectionData = getResolvedCategorySelectionData(category.id);
+  if (!selectionData) {
+    return false;
+  }
+
+  if (category.has_models && pageData.categorization?.brand?.id) {
+    return Boolean(
+      getResolvedCategoryModels(category.id, pageData.categorization.brand.id),
+    );
+  }
+
+  return Boolean(selectionData);
+}
+
+function getResolvedCategoryPageData(towKod: string): CategoryPageResponse | null {
+  const cached = categoryPageCache.get(towKod);
+  return cached && !(cached instanceof Promise) ? cached : null;
+}
+
+function getResolvedCategorySelectionData(categoryID: number): CachedCategorySelection | null {
+  const cached = categorySelectionCache.get(categoryID);
+  return cached && !(cached instanceof Promise) ? cached : null;
+}
+
+function getResolvedCategoryModels(categoryID: number, brandID: number): OLXModel[] | null {
+  const cached = categoryModelsCache.get(`${categoryID}:${brandID}`);
+  return cached && !(cached instanceof Promise) ? cached : null;
 }
 
 function escapeHtml(value: string): string {

@@ -140,6 +140,10 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
+			w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
+			w.Header().Set("Expires", "0")
+			w.Header().Set("Clear-Site-Data", "\"cache\"")
 			http.ServeFile(w, r, filepath.Join(a.distDir, "index.html"))
 			return
 		}

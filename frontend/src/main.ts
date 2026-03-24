@@ -1,7 +1,8 @@
 import "./style.css";
 import { mountBulkCategoryPage } from "./bulk-category";
-import { mountCategoryPage } from "./category";
+import { mountCategoryPage, prefetchCategoryPage } from "./category";
 import { mountBulkEditPage } from "./bulk-edit";
+import { mountDescriptionPage } from "./description";
 import { mountEditPage } from "./edit";
 import { loadSessionInfo, renderSessionBadge } from "./session";
 import { mountPageTransition, navigateWithFade } from "./transition";
@@ -283,7 +284,18 @@ const deleteSelectedIcon = `
   </svg>
 `;
 
+const descriptionIcon = `
+  <svg fill="currentColor" viewBox="144 144 512 512" aria-hidden="true">
+    <path d="m588.93 295.04H211.07v-62.977c0-5.5664 2.2109-10.906 6.1484-14.844s9.2773-6.1484 14.844-6.1484h335.87c5.5703 0 10.91 2.2109 14.844 6.1484 3.9375 3.9375 6.1484 9.2773 6.1484 14.844zM211.07 567.93V337.02h377.86v230.91c0 5.5703-2.2109 10.91-6.1484 14.844-3.9336 3.9375-9.2734 6.1484-14.844 6.1484h-335.87c-5.5664 0-10.906-2.2109-14.844-6.1484-3.9375-3.9336-6.1484-9.2734-6.1484-14.844zm62.977-125.95 251.9 0.003906v-41.984h-251.9zm0 83.969h125.95v-41.984h-125.95z" />
+  </svg>
+`;
+
 function render(): void {
+  if (isDescriptionPath()) {
+    mountDescriptionPage(root);
+    return;
+  }
+
   if (isBulkCategoryPath()) {
     mountBulkCategoryPage(root);
     return;
@@ -549,19 +561,31 @@ function render(): void {
       </main>
 
       <footer class="footer-bar">
-        <div class="toolbar-action">
+        <div class="toolbar-action footer-clear-action">
           <button class="danger-button" id="clearButton">
             <span class="button-icon">${deleteIcon}</span>
           </button>
           <span class="action-label">OBRISI</span>
         </div>
-        <div class="toolbar-action">
-          <button class="publish-button" id="publishButton" type="button" ${
-            state.isPublishing ? "disabled" : ""
-          }>
-            <span class="button-icon">${publishIcon}</span>
-          </button>
-          <span class="action-label">OBJAVI</span>
+        <div class="footer-counts" aria-live="polite">
+          <span class="footer-count-total">${state.data.totalItems}</span>
+          <span class="footer-count-selected">${state.selectedTowKods.length}</span>
+        </div>
+        <div class="footer-actions-right">
+          <div class="toolbar-action">
+            <button class="description-button" id="descriptionButton" type="button">
+              <span class="button-icon description-button-icon">${descriptionIcon}</span>
+            </button>
+            <span class="action-label description-action-label">DESKRIPCIJA</span>
+          </div>
+          <div class="toolbar-action">
+            <button class="publish-button" id="publishButton" type="button" ${
+              state.isPublishing ? "disabled" : ""
+            }>
+              <span class="button-icon">${publishIcon}</span>
+            </button>
+            <span class="action-label">OBJAVI</span>
+          </div>
         </div>
       </footer>
     </div>
@@ -596,6 +620,8 @@ function bindEvents(): void {
     document.querySelector<HTMLButtonElement>("#browseButton");
   const dropZone = document.querySelector<HTMLElement>("#dropZone");
   const clearButton = document.querySelector<HTMLButtonElement>("#clearButton");
+  const descriptionButton =
+    document.querySelector<HTMLButtonElement>("#descriptionButton");
   const publishButton =
     document.querySelector<HTMLButtonElement>("#publishButton");
   const imageButtons =
@@ -741,6 +767,10 @@ function bindEvents(): void {
       render();
     }
   });
+  descriptionButton?.addEventListener("click", () => {
+    navigateWithFade(root, "/description");
+  });
+
   publishButton?.addEventListener("click", async () => {
     if (state.isPublishing || state.data.items.length === 0) {
       return;
@@ -968,6 +998,17 @@ function bindEvents(): void {
   }
 
   for (const button of categoryButtons) {
+    const prefetch = () => {
+      const code = button.dataset.categoryCode;
+      if (!code) {
+        return;
+      }
+
+      prefetchCategoryPage(code);
+    };
+
+    button.addEventListener("mouseenter", prefetch);
+    button.addEventListener("focus", prefetch);
     button.addEventListener("click", () => {
       const code = button.dataset.categoryCode;
       if (!code) {
@@ -995,6 +1036,7 @@ async function loadState(): Promise<void> {
     state.data = data as CatalogState;
     state.imageIndexes = {};
     reconcileSelectionState();
+    scheduleCategoryPrefetch(state.data.items);
     if (state.data.totalItems > 0) {
       state.message = "Artikli su ucitani.";
       state.messageTone = "success";
@@ -1056,6 +1098,7 @@ async function uploadFiles(files: File[]): Promise<void> {
       }
     }
     reconcileSelectionState();
+    scheduleCategoryPrefetch(state.data.items);
     state.animateItemsIn = true;
     state.message = "Artikli su dodati.";
     state.messageTone = "success";
@@ -1153,6 +1196,38 @@ function saveStoredSelectedTowKods(values: string[]): void {
     SELECTED_TOWKODS_STORAGE_KEY,
     JSON.stringify(values),
   );
+}
+
+function scheduleCategoryPrefetch(items: CatalogItem[]): void {
+  const towKods = items
+    .map((item) => item.towKod)
+    .filter((towKod): towKod is string => Boolean(towKod));
+
+  if (towKods.length === 0) {
+    return;
+  }
+
+  const uniqueTowKods = [...new Set(towKods)];
+  const batchSize = 4;
+  let index = 0;
+
+  const runBatch = () => {
+    const batch = uniqueTowKods.slice(index, index + batchSize);
+    if (batch.length === 0) {
+      return;
+    }
+
+    for (const towKod of batch) {
+      prefetchCategoryPage(towKod);
+    }
+
+    index += batchSize;
+    if (index < uniqueTowKods.length) {
+      window.setTimeout(runBatch, 40);
+    }
+  };
+
+  window.setTimeout(runBatch, 0);
 }
 
 function getSelectableTowKods(items: CatalogItem[]): string[] {
@@ -1288,6 +1363,10 @@ function isBulkEditPath(): boolean {
   return window.location.pathname === "/edit-selected";
 }
 
+function isDescriptionPath(): boolean {
+  return window.location.pathname === "/description";
+}
+
 function getCategoryTowKodFromPath(): string | null {
   const match = window.location.pathname.match(/^\/category\/(.+)$/);
   if (!match) {
@@ -1301,7 +1380,9 @@ function getCategoryTowKodFromPath(): string | null {
   }
 }
 
-if (isBulkCategoryPath()) {
+if (isDescriptionPath()) {
+  mountDescriptionPage(root);
+} else if (isBulkCategoryPath()) {
   mountBulkCategoryPage(root);
 } else if (isBulkEditPath()) {
   mountBulkEditPage(root);
