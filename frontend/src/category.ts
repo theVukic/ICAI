@@ -1,6 +1,7 @@
 import { navigateWithFade } from "./transition";
 import { renderPublishSessionBadge } from "./publish-session";
 import { loadSessionInfo, renderSessionBadge } from "./session";
+import { renderAppBrand } from "./branding";
 
 const backIcon = `
   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -271,12 +272,16 @@ function renderCategoryPage(root: HTMLDivElement, towKod: string): void {
   root.innerHTML = `
     <div class="shell edit-shell">
       <header class="topbar edit-topbar">
-        <div class="logo-wrap">
-          <div class="logo-mark">IC</div>
-          <strong>ICAI</strong>
-          ${renderSessionBadge(state.tokenConfigured ? { tokenConfigured: true, username: state.sessionUsername, fullName: "" } : null)}
-          ${renderPublishSessionBadge()}
-        </div>
+        ${renderAppBrand(
+          `
+            ${renderSessionBadge(
+              state.tokenConfigured
+                ? { tokenConfigured: true, username: state.sessionUsername, fullName: "" }
+                : null,
+            )}
+            ${renderPublishSessionBadge()}
+          `,
+        )}
       </header>
 
       <main class="category-page">

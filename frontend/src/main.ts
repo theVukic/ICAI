@@ -9,6 +9,7 @@ import { Notyf } from "notyf";
 import { getPublishSessionStats, recordPublishSessionOutcome } from "./publish-session";
 import { fetchListingLimits, loadSessionInfo, renderSessionBadge, type ListingLimits } from "./session";
 import { mountPageTransition, navigateWithFade } from "./transition";
+import { renderAppBrand } from "./branding";
 
 type CatalogImage = {
   position: number;
@@ -439,11 +440,13 @@ function render(): void {
   root.innerHTML = `
     <div class="shell">
       <header class="topbar">
-        <div class="logo-wrap">
-          <div class="logo-mark">IC</div>
-          <strong>ICAI</strong>
-          ${renderSessionBadge(state.tokenConfigured ? { tokenConfigured: true, username: state.sessionUsername, fullName: "" } : null)}
-        </div>
+        ${renderAppBrand(
+          renderSessionBadge(
+            state.tokenConfigured
+              ? { tokenConfigured: true, username: state.sessionUsername, fullName: "" }
+              : null,
+          ),
+        )}
         <div class="header-actions">
         ${
           state.selectionToolsVisible

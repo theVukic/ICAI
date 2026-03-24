@@ -21,7 +21,7 @@ type CatalogStore struct {
 }
 
 func NewCatalogStore() (*CatalogStore, error) {
-	tempDir, err := os.MkdirTemp("", "icaiapp-catalogs-*")
+	tempDir, err := os.MkdirTemp("", "icai-*")
 	if err != nil {
 		return nil, fmt.Errorf("nije moguće kreirati temp folder: %w", err)
 	}

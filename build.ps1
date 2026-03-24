@@ -17,7 +17,12 @@ $frontendDir = Join-Path $rootDir "frontend"
 $backendDir = Join-Path $rootDir "backend"
 $appDir = Join-Path $rootDir "app"
 $appDistDir = Join-Path $appDir "dist"
-$appExePath = Join-Path $appDir "app.exe"
+$appExePath = Join-Path $appDir "ICAI.exe"
+$legacyAppExePath = Join-Path $appDir "app.exe"
+$backendExePath = Join-Path $backendDir "ICAI.exe"
+$legacyBackendExePath = Join-Path $backendDir "backend.exe"
+$iconPath = Join-Path $backendDir "icon.png"
+$goWinResPath = Join-Path $env:USERPROFILE "go\bin\go-winres.exe"
 $certPath = Join-Path $rootDir "certs\ICAIcert.pfx"
 
 $certPassword = "snayrexkrmak2002"
@@ -35,12 +40,20 @@ try {
         throw "backend folder not found"
     }
 
+    if (!(Test-Path $iconPath)) {
+        throw "Application icon not found: $iconPath"
+    }
+
     if (!(Test-Path $certPath)) {
         throw "Certificate not found: $certPath"
     }
 
     if (!(Test-Path $signtool)) {
         throw "signtool.exe not found: $signtool"
+    }
+
+    if (!(Test-Path $goWinResPath)) {
+        throw "go-winres.exe not found: $goWinResPath"
     }
 
     Log "Preparing app output folder"
@@ -67,13 +80,33 @@ try {
     }
     Success "app/dist prepared"
 
-    Log "Removing old app.exe if it exists"
+    Log "Removing old executables if they exist"
     if (Test-Path $appExePath) {
         Remove-Item -Force $appExePath
     }
+    if (Test-Path $legacyAppExePath) {
+        Remove-Item -Force $legacyAppExePath
+    }
+    if (Test-Path $backendExePath) {
+        Remove-Item -Force $backendExePath
+    }
+    if (Test-Path $legacyBackendExePath) {
+        Remove-Item -Force $legacyBackendExePath
+    }
 
-    Log "Building Go executable to app/app.exe"
+    Log "Generating Windows resources from app icon"
     Push-Location $backendDir
+    & $goWinResPath simply `
+        --arch amd64 `
+        --icon $iconPath `
+        --product-name "ICAI" `
+        --file-description "ICAI desktop application" `
+        --original-filename "ICAI.exe"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Windows resource generation failed"
+    }
+
+    Log "Building Go executable to app/ICAI.exe"
     go build -ldflags="-s -w" -o $appExePath
     if ($LASTEXITCODE -ne 0) {
         throw "Go build failed"
@@ -81,7 +114,7 @@ try {
     Pop-Location
     Success "Executable built: $appExePath"
 
-    Log "Signing app.exe"
+    Log "Signing ICAI.exe"
     & $signtool sign `
         /tr http://timestamp.digicert.com `
         /td sha256 `

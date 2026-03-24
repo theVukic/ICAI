@@ -1,6 +1,7 @@
 import { navigateWithFade } from "./transition";
 import { renderPublishSessionBadge } from "./publish-session";
 import { loadSessionInfo, renderSessionBadge } from "./session";
+import { renderAppBrand } from "./branding";
 
 const SELECTED_TOWKODS_STORAGE_KEY = "icaiapp:selected-towkods";
 
@@ -211,12 +212,16 @@ function renderBulkCategoryPage(root: HTMLDivElement): void {
   root.innerHTML = `
     <div class="shell edit-shell">
       <header class="topbar edit-topbar">
-        <div class="logo-wrap">
-          <div class="logo-mark">IC</div>
-          <strong>ICAI</strong>
-          ${renderSessionBadge(state.tokenConfigured ? { tokenConfigured: true, username: state.sessionUsername, fullName: "" } : null)}
-          ${renderPublishSessionBadge()}
-        </div>
+        ${renderAppBrand(
+          `
+            ${renderSessionBadge(
+              state.tokenConfigured
+                ? { tokenConfigured: true, username: state.sessionUsername, fullName: "" }
+                : null,
+            )}
+            ${renderPublishSessionBadge()}
+          `,
+        )}
       </header>
 
       <main class="edit-page bulk-edit-page">

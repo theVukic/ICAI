@@ -1,0 +1,16 @@
+{
+  "config_version": 1,
+  "users": [
+    {
+      "username_lookup_hash": "7v0aFPPzKvxRwN9hLL2E7H1Fq7+CZ+juUoeqorhgUSo=",
+      "username_hash": "YyFL0PXKXWvyBa1Sg+3IVrN2GjPAV9ueqJoGRM/icBs=",
+      "password_hash": "WdW02YdxYKDxEY4AvXZ+NQO2J5rxjOYtbn1XY/SLIz8=",
+      "salt_username": "NX4ovc60l0OUeJpnnapplg==",
+      "salt_password": "q3PHGX3uTnEasSD4yYyY8w==",
+      "enabled": true,
+      "role": "admin",
+      "expires_at": "2026-03-24T20:00:00Z",
+      "note": "nmp"
+    }
+  ]
+}
