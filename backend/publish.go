@@ -5,8 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/draw"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"log"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -17,6 +24,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+)
+
+const (
+	minUploadAspectRatio = 0.8
+	blurRadius           = 18
+	uploadJPEGQuality    = 92
 )
 
 type olxListingAttributeValue struct {
@@ -596,20 +609,35 @@ func (s *OLXCategoryService) doMultipartImageUpload(ctx context.Context, listing
 			return nil, fmt.Errorf("preuzimanje slike nije uspelo (%d): %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
 		}
 
-		fileName := imageFileNameFromURL(imageURL, resp.Header.Get("Content-Type"), index)
-		part, err := createImageMultipartPart(writer, "images[]", fileName, resp.Header.Get("Content-Type"))
+		sourceContentType := resp.Header.Get("Content-Type")
+		imageBytes, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		if err != nil {
-			resp.Body.Close()
+			_ = writer.Close()
+			return nil, fmt.Errorf("čitanje slike nije uspelo: %w", err)
+		}
+
+		uploadBytes, uploadContentType, transformed, err := prepareImageForUpload(imageBytes, sourceContentType)
+		if err != nil {
+			_ = writer.Close()
+			return nil, fmt.Errorf("obrada slike nije uspela: %w", err)
+		}
+
+		if transformed {
+			log.Printf("[PUBLISH] image padded with blurred sides source=%s", imageURL)
+		}
+
+		fileName := imageFileNameFromURL(imageURL, uploadContentType, index)
+		part, err := createImageMultipartPart(writer, "images[]", fileName, uploadContentType)
+		if err != nil {
 			_ = writer.Close()
 			return nil, err
 		}
 
-		if _, err := io.Copy(part, resp.Body); err != nil {
-			resp.Body.Close()
+		if _, err := io.Copy(part, bytes.NewReader(uploadBytes)); err != nil {
 			_ = writer.Close()
 			return nil, fmt.Errorf("kopiranje slike u multipart nije uspelo: %w", err)
 		}
-		resp.Body.Close()
 	}
 
 	if err := writer.Close(); err != nil {
@@ -660,6 +688,143 @@ func createImageMultipartPart(writer *multipart.Writer, fieldName string, fileNa
 	return writer.CreatePart(headers)
 }
 
+func prepareImageForUpload(imageBytes []byte, contentType string) ([]byte, string, bool, error) {
+	img, _, err := image.Decode(bytes.NewReader(imageBytes))
+	if err != nil {
+		return imageBytes, firstNonEmpty(strings.TrimSpace(contentType), "image/jpeg"), false, nil
+	}
+
+	bounds := img.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return imageBytes, firstNonEmpty(strings.TrimSpace(contentType), "image/jpeg"), false, nil
+	}
+
+	aspectRatio := float64(width) / float64(height)
+	if aspectRatio >= minUploadAspectRatio {
+		return imageBytes, firstNonEmpty(strings.TrimSpace(contentType), "image/jpeg"), false, nil
+	}
+
+	targetWidth := int(math.Ceil(float64(height) * minUploadAspectRatio))
+	if targetWidth <= width {
+		return imageBytes, firstNonEmpty(strings.TrimSpace(contentType), "image/jpeg"), false, nil
+	}
+
+	background := resizeToCover(img, targetWidth, height)
+	blurred := blurRGBA(background, blurRadius)
+	canvas := image.NewRGBA(image.Rect(0, 0, targetWidth, height))
+	draw.Draw(canvas, canvas.Bounds(), blurred, image.Point{}, draw.Src)
+
+	offsetX := (targetWidth - width) / 2
+	draw.Draw(
+		canvas,
+		image.Rect(offsetX, 0, offsetX+width, height),
+		img,
+		bounds.Min,
+		draw.Over,
+	)
+
+	var output bytes.Buffer
+	if err := jpeg.Encode(&output, canvas, &jpeg.Options{Quality: uploadJPEGQuality}); err != nil {
+		return nil, "", false, err
+	}
+
+	return output.Bytes(), "image/jpeg", true, nil
+}
+
+func resizeToCover(src image.Image, targetWidth int, targetHeight int) *image.RGBA {
+	srcBounds := src.Bounds()
+	srcWidth := srcBounds.Dx()
+	srcHeight := srcBounds.Dy()
+
+	scale := math.Max(float64(targetWidth)/float64(srcWidth), float64(targetHeight)/float64(srcHeight))
+	scaledWidth := maxInt(1, int(math.Ceil(float64(srcWidth)*scale)))
+	scaledHeight := maxInt(1, int(math.Ceil(float64(srcHeight)*scale)))
+
+	scaled := resizeImageNearest(src, scaledWidth, scaledHeight)
+	dst := image.NewRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+
+	offsetX := (scaledWidth - targetWidth) / 2
+	offsetY := (scaledHeight - targetHeight) / 2
+	draw.Draw(dst, dst.Bounds(), scaled, image.Point{X: offsetX, Y: offsetY}, draw.Src)
+
+	return dst
+}
+
+func resizeImageNearest(src image.Image, targetWidth int, targetHeight int) *image.RGBA {
+	dst := image.NewRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+	srcBounds := src.Bounds()
+	srcWidth := srcBounds.Dx()
+	srcHeight := srcBounds.Dy()
+
+	for y := 0; y < targetHeight; y++ {
+		srcY := srcBounds.Min.Y + (y*srcHeight)/targetHeight
+		for x := 0; x < targetWidth; x++ {
+			srcX := srcBounds.Min.X + (x*srcWidth)/targetWidth
+			dst.Set(x, y, src.At(srcX, srcY))
+		}
+	}
+
+	return dst
+}
+
+func blurRGBA(src *image.RGBA, radius int) *image.RGBA {
+	if radius <= 0 {
+		dst := image.NewRGBA(src.Bounds())
+		copy(dst.Pix, src.Pix)
+		return dst
+	}
+
+	bounds := src.Bounds()
+	tmp := image.NewRGBA(bounds)
+	dst := image.NewRGBA(bounds)
+
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			var rSum, gSum, bSum, aSum, count int
+			for sampleX := x - radius; sampleX <= x+radius; sampleX++ {
+				clampedX := clampInt(sampleX, bounds.Min.X, bounds.Max.X-1)
+				offset := src.PixOffset(clampedX, y)
+				rSum += int(src.Pix[offset])
+				gSum += int(src.Pix[offset+1])
+				bSum += int(src.Pix[offset+2])
+				aSum += int(src.Pix[offset+3])
+				count++
+			}
+
+			offset := tmp.PixOffset(x, y)
+			tmp.Pix[offset] = uint8(rSum / count)
+			tmp.Pix[offset+1] = uint8(gSum / count)
+			tmp.Pix[offset+2] = uint8(bSum / count)
+			tmp.Pix[offset+3] = uint8(aSum / count)
+		}
+	}
+
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			var rSum, gSum, bSum, aSum, count int
+			for sampleY := y - radius; sampleY <= y+radius; sampleY++ {
+				clampedY := clampInt(sampleY, bounds.Min.Y, bounds.Max.Y-1)
+				offset := tmp.PixOffset(x, clampedY)
+				rSum += int(tmp.Pix[offset])
+				gSum += int(tmp.Pix[offset+1])
+				bSum += int(tmp.Pix[offset+2])
+				aSum += int(tmp.Pix[offset+3])
+				count++
+			}
+
+			offset := dst.PixOffset(x, y)
+			dst.Pix[offset] = uint8(rSum / count)
+			dst.Pix[offset+1] = uint8(gSum / count)
+			dst.Pix[offset+2] = uint8(bSum / count)
+			dst.Pix[offset+3] = uint8(aSum / count)
+		}
+	}
+
+	return dst
+}
+
 func imageFileNameFromURL(rawURL string, contentType string, index int) string {
 	parsed, err := url.Parse(rawURL)
 	if err == nil {
@@ -703,4 +868,21 @@ func extensionFromContentType(contentType string) string {
 
 func escapeMultipartQuotes(value string) string {
 	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"").Replace(value)
+}
+
+func clampInt(value int, minValue int, maxValue int) int {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}
+
+func maxInt(left int, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }
