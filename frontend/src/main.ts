@@ -154,6 +154,7 @@ const state: {
   listingLimitUnlimited: boolean;
   listingLimitLoading: boolean;
   shouldRestoreMainScroll: boolean;
+  refreshSuspendUntil: number;
 } = {
   data: {
     catalogs: [],
@@ -188,6 +189,7 @@ const state: {
   listingLimitUnlimited: false,
   listingLimitLoading: false,
   shouldRestoreMainScroll: false,
+  refreshSuspendUntil: 0,
 };
 
 const plusIcon = `
@@ -686,6 +688,7 @@ function bindEvents(): void {
   }
 
   const openPicker = () => {
+    suspendMainRefresh(3000);
     state.isPickingFiles = true;
     fileInput.click();
   };
@@ -999,8 +1002,13 @@ function bindEvents(): void {
   }
 
   fileInput.addEventListener("change", async () => {
-    state.isPickingFiles = false;
     const files = fileInput.files ? Array.from(fileInput.files) : [];
+    if (files.length > 0) {
+      suspendMainRefresh(3000);
+    } else {
+      suspendMainRefresh(600);
+    }
+    state.isPickingFiles = false;
     await uploadFiles(files);
     fileInput.value = "";
   });
@@ -1036,6 +1044,7 @@ function bindEvents(): void {
 
   clearButton.addEventListener("click", async () => {
     clearButton.disabled = true;
+    suspendMainRefresh(1500);
     try {
       const response = await fetch("/api/catalog", { method: "DELETE" });
       const data = (await response.json()) as CatalogResponse;
@@ -1146,7 +1155,12 @@ async function loadState(): Promise<void> {
 
     const nextData = data as CatalogState;
     applyListingLimits(await limitsPromise);
-    if (!state.isPublishing && !state.isUploading && !state.isPickingFiles) {
+    if (
+      !state.isPublishing &&
+      !state.isUploading &&
+      !state.isPickingFiles &&
+      !isMainRefreshSuspended()
+    ) {
       state.data = nextData;
       state.imageIndexes = {};
       reconcileSelectionState();
@@ -1156,6 +1170,7 @@ async function loadState(): Promise<void> {
       !state.isPublishing &&
       !state.isUploading &&
       !state.isPickingFiles &&
+      !isMainRefreshSuspended() &&
       state.data.totalItems > 0
     ) {
       state.message = "Artikli su ucitani.";
@@ -1230,7 +1245,8 @@ function refreshMainPageFromStore(): void {
     Boolean(getCategoryTowKodFromPath()) ||
     state.isPublishing ||
     state.isUploading ||
-    state.isPickingFiles
+    state.isPickingFiles ||
+    isMainRefreshSuspended()
   ) {
     return;
   }
@@ -1265,6 +1281,15 @@ function restoreMainScrollPosition(): void {
   });
 }
 
+function suspendMainRefresh(durationMs: number): void {
+  const nextSuspendUntil = Date.now() + Math.max(0, durationMs);
+  state.refreshSuspendUntil = Math.max(state.refreshSuspendUntil, nextSuspendUntil);
+}
+
+function isMainRefreshSuspended(): boolean {
+  return Date.now() < state.refreshSuspendUntil;
+}
+
 async function uploadFiles(files: File[]): Promise<void> {
   state.isPickingFiles = false;
   const jsonFiles = files.filter((file) =>
@@ -1278,6 +1303,7 @@ async function uploadFiles(files: File[]): Promise<void> {
   }
 
   state.isUploading = true;
+  suspendMainRefresh(3000);
   state.message = "Ucitavam artikle...";
   state.messageTone = "muted";
   render();

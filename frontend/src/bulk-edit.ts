@@ -314,6 +314,7 @@ function bindBulkEditEvents(root: HTMLDivElement): void {
         throw new Error("error" in data ? data.error : "Cuvanje nije uspelo.");
       }
 
+      state.isSaving = false;
       navigateWithFade(root, "/");
     } catch (error) {
       state.message =

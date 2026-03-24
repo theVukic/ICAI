@@ -169,6 +169,7 @@ function bindDescriptionEvents(root: HTMLDivElement): void {
 
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    let shouldNavigateHome = false;
 
     state.editorHtml = getEditorHtml();
     state.isSaving = true;
@@ -194,13 +195,18 @@ function bindDescriptionEvents(root: HTMLDivElement): void {
       const document = data as DescriptionResponse;
       state.profileName = document.profileName || state.profileName;
       state.editorHtml = document.content || "";
-      navigateWithFade(root, "/");
-      return;
+      state.isSaving = false;
+      shouldNavigateHome = true;
     } catch (error) {
       state.message =
         error instanceof Error ? error.message : "Cuvanje nije uspelo.";
       state.tone = "danger";
     } finally {
+      if (shouldNavigateHome) {
+        navigateWithFade(root, "/");
+        return;
+      }
+
       state.isSaving = false;
       renderDescriptionPage(root);
     }

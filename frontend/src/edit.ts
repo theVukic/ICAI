@@ -287,6 +287,7 @@ function bindEditEvents(root: HTMLDivElement, towKod: string): void {
       }
 
       state.item = data as CatalogItem;
+      state.isSaving = false;
       navigateWithFade(root, "/");
     } catch (error) {
       state.message =

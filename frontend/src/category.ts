@@ -607,6 +607,7 @@ function bindCategoryEvents(
 
       state.tone = "success";
       state.message = "Kategorija je sačuvana.";
+      state.saving = false;
       navigateWithFade(root, "/");
     } catch (error) {
       state.message =

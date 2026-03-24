@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,7 +31,31 @@ const (
 	minUploadAspectRatio = 0.8
 	blurRadius           = 18
 	uploadJPEGQuality    = 92
+	publishWorkerCount   = 2
 )
+
+type publishJob struct {
+	index int
+	item  CatalogItem
+}
+
+type publishOutcome struct {
+	index     int
+	item      CatalogItem
+	listingID int
+	err       error
+}
+
+type categoryAttributesCache struct {
+	mu      sync.Mutex
+	entries map[int]*categoryAttributesCacheEntry
+}
+
+type categoryAttributesCacheEntry struct {
+	ready      chan struct{}
+	attributes []OLXCategoryAttribute
+	err        error
+}
 
 type olxListingAttributeValue struct {
 	ID    int    `json:"id"`
@@ -148,6 +173,7 @@ func (a *App) publishCatalogItems(ctx context.Context, selectedTowKods []string)
 	}
 
 	publishedTowKods := make([]string, 0)
+	publishableJobs := make([]publishJob, 0)
 
 	for _, item := range state.Items {
 		if useSelection {
@@ -180,27 +206,38 @@ func (a *App) publishCatalogItems(ctx context.Context, selectedTowKods []string)
 			continue
 		}
 
-		listingID, publishErr := a.publishSingleItem(ctx, item, document)
-		if publishErr != nil {
-			log.Printf("[PUBLISH] failed towKod=%s error=%v", item.TowKod, publishErr)
-			result.Failed = append(result.Failed, FailedListingResult{
-				TowKod: item.TowKod,
-				Title:  item.NameB2B,
-				Error:  publishErr.Error(),
-			})
-			continue
-		}
-
-		publishedTowKods = append(publishedTowKods, item.TowKod)
-		log.Printf("[PUBLISH] success towKod=%s listingID=%d", item.TowKod, listingID)
-		result.Published = append(result.Published, PublishedListingResult{
-			TowKod:      item.TowKod,
-			Title:       item.NameB2B,
-			ListingID:   listingID,
-			Published:   true,
-			PublishedAt: time.Now().Format(time.RFC3339),
-			Message:     "objavljen na OLX",
+		publishableJobs = append(publishableJobs, publishJob{
+			index: len(publishableJobs),
+			item:  item,
 		})
+	}
+
+	if len(publishableJobs) > 0 {
+		attributeCache := newCategoryAttributesCache()
+		outcomes := a.publishItemsParallel(ctx, publishableJobs, document, attributeCache)
+
+		for _, outcome := range outcomes {
+			if outcome.err != nil {
+				log.Printf("[PUBLISH] failed towKod=%s error=%v", outcome.item.TowKod, outcome.err)
+				result.Failed = append(result.Failed, FailedListingResult{
+					TowKod: outcome.item.TowKod,
+					Title:  outcome.item.NameB2B,
+					Error:  outcome.err.Error(),
+				})
+				continue
+			}
+
+			publishedTowKods = append(publishedTowKods, outcome.item.TowKod)
+			log.Printf("[PUBLISH] success towKod=%s listingID=%d", outcome.item.TowKod, outcome.listingID)
+			result.Published = append(result.Published, PublishedListingResult{
+				TowKod:      outcome.item.TowKod,
+				Title:       outcome.item.NameB2B,
+				ListingID:   outcome.listingID,
+				Published:   true,
+				PublishedAt: time.Now().Format(time.RFC3339),
+				Message:     "objavljen na OLX",
+			})
+		}
 	}
 
 	if len(publishedTowKods) > 0 {
@@ -228,12 +265,68 @@ func (a *App) publishCatalogItems(ctx context.Context, selectedTowKods []string)
 	return result, http.StatusOK, nil
 }
 
-func (a *App) publishSingleItem(ctx context.Context, item CatalogItem, document DescriptionDocument) (int, error) {
+func (a *App) publishItemsParallel(
+	ctx context.Context,
+	jobs []publishJob,
+	document DescriptionDocument,
+	attributeCache *categoryAttributesCache,
+) []publishOutcome {
+	workerCount := publishWorkerCount
+	if len(jobs) < workerCount {
+		workerCount = len(jobs)
+	}
+	if workerCount <= 0 {
+		return nil
+	}
+
+	jobCh := make(chan publishJob)
+	outcomeCh := make(chan publishOutcome, len(jobs))
+	var wg sync.WaitGroup
+
+	for workerIndex := 0; workerIndex < workerCount; workerIndex++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			for job := range jobCh {
+				listingID, err := a.publishSingleItem(ctx, job.item, document, attributeCache)
+				outcomeCh <- publishOutcome{
+					index:     job.index,
+					item:      job.item,
+					listingID: listingID,
+					err:       err,
+				}
+			}
+		}()
+	}
+
+	for _, job := range jobs {
+		jobCh <- job
+	}
+	close(jobCh)
+
+	wg.Wait()
+	close(outcomeCh)
+
+	outcomes := make([]publishOutcome, len(jobs))
+	for outcome := range outcomeCh {
+		outcomes[outcome.index] = outcome
+	}
+
+	return outcomes
+}
+
+func (a *App) publishSingleItem(
+	ctx context.Context,
+	item CatalogItem,
+	document DescriptionDocument,
+	attributeCache *categoryAttributesCache,
+) (int, error) {
 	if item.Categorization == nil || item.Categorization.Category == nil {
 		return 0, fmt.Errorf("kategorija nije podešena")
 	}
 
-	listingPayload, err := a.buildListingPayload(ctx, item, document)
+	listingPayload, err := a.buildListingPayload(ctx, item, document, attributeCache)
 	if err != nil {
 		return 0, err
 	}
@@ -278,9 +371,14 @@ func (a *App) publishSingleItem(ctx context.Context, item CatalogItem, document 
 	return listingID, nil
 }
 
-func (a *App) buildListingPayload(ctx context.Context, item CatalogItem, document DescriptionDocument) (olxCreateListingRequest, error) {
+func (a *App) buildListingPayload(
+	ctx context.Context,
+	item CatalogItem,
+	document DescriptionDocument,
+	attributeCache *categoryAttributesCache,
+) (olxCreateListingRequest, error) {
 	categoryID := item.Categorization.Category.ID
-	attributes, err := a.olxCategories.GetCategoryAttributes(ctx, categoryID)
+	attributes, err := attributeCache.Get(ctx, a.olxCategories, categoryID)
 	if err != nil {
 		return olxCreateListingRequest{}, fmt.Errorf("nije moguće učitati atribute za kategoriju %d: %w", categoryID, err)
 	}
@@ -310,6 +408,40 @@ func (a *App) buildListingPayload(ctx context.Context, item CatalogItem, documen
 	}
 
 	return payload, nil
+}
+
+func newCategoryAttributesCache() *categoryAttributesCache {
+	return &categoryAttributesCache{
+		entries: make(map[int]*categoryAttributesCacheEntry),
+	}
+}
+
+func (c *categoryAttributesCache) Get(
+	ctx context.Context,
+	service *OLXCategoryService,
+	categoryID int,
+) ([]OLXCategoryAttribute, error) {
+	c.mu.Lock()
+	if entry, ok := c.entries[categoryID]; ok {
+		c.mu.Unlock()
+		select {
+		case <-entry.ready:
+			return entry.attributes, entry.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	entry := &categoryAttributesCacheEntry{
+		ready: make(chan struct{}),
+	}
+	c.entries[categoryID] = entry
+	c.mu.Unlock()
+
+	entry.attributes, entry.err = service.GetCategoryAttributes(ctx, categoryID)
+	close(entry.ready)
+
+	return entry.attributes, entry.err
 }
 
 func (a *App) uploadListingImages(ctx context.Context, listingID int, images []CatalogImage) (int, error) {
