@@ -716,76 +716,22 @@ func (s *OLXCategoryService) doMultipartImageUpload(ctx context.Context, listing
 		return nil, fmt.Errorf("OLX token nije podešen. Zalijepi ga u backend/token.json")
 	}
 
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
+	pipeReader, pipeWriter := io.Pipe()
+	writer := multipart.NewWriter(pipeWriter)
+	uploadErrCh := make(chan error, 1)
 
-	for index, image := range images {
-		imageURL := strings.TrimSpace(image.URL)
-		if imageURL == "" {
-			continue
-		}
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
-		if err != nil {
-			_ = writer.Close()
-			return nil, fmt.Errorf("preuzimanje slike nije uspelo: %w", err)
-		}
-
-		resp, err := s.httpClient.Do(req)
-		if err != nil {
-			_ = writer.Close()
-			return nil, fmt.Errorf("preuzimanje slike nije uspelo: %w", err)
-		}
-
-		if resp.StatusCode >= http.StatusBadRequest {
-			responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			resp.Body.Close()
-			_ = writer.Close()
-			return nil, fmt.Errorf("preuzimanje slike nije uspelo (%d): %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
-		}
-
-		sourceContentType := resp.Header.Get("Content-Type")
-		imageBytes, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			_ = writer.Close()
-			return nil, fmt.Errorf("čitanje slike nije uspelo: %w", err)
-		}
-
-		uploadBytes, uploadContentType, transformed, err := prepareImageForUpload(imageBytes, sourceContentType)
-		if err != nil {
-			_ = writer.Close()
-			return nil, fmt.Errorf("obrada slike nije uspela: %w", err)
-		}
-
-		if transformed {
-			log.Printf("[PUBLISH] image padded with blurred sides source=%s", imageURL)
-		}
-
-		fileName := imageFileNameFromURL(imageURL, uploadContentType, index)
-		part, err := createImageMultipartPart(writer, "images[]", fileName, uploadContentType)
-		if err != nil {
-			_ = writer.Close()
-			return nil, err
-		}
-
-		if _, err := io.Copy(part, bytes.NewReader(uploadBytes)); err != nil {
-			_ = writer.Close()
-			return nil, fmt.Errorf("kopiranje slike u multipart nije uspelo: %w", err)
-		}
-	}
-
-	if err := writer.Close(); err != nil {
-		return nil, err
-	}
+	go func() {
+		uploadErrCh <- s.streamImagesToMultipart(ctx, writer, pipeWriter, images)
+	}()
 
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
 		fmt.Sprintf("%s/listings/%d/image-upload", olxBaseURL, listingID),
-		&body,
+		pipeReader,
 	)
 	if err != nil {
+		_ = pipeReader.Close()
 		return nil, err
 	}
 
@@ -807,7 +753,78 @@ func (s *OLXCategoryService) doMultipartImageUpload(ctx context.Context, listing
 		return nil, fmt.Errorf("OLX API greška (%d): %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
 	}
 
+	if uploadErr := <-uploadErrCh; uploadErr != nil {
+		return nil, uploadErr
+	}
+
 	return responseBody, nil
+}
+
+func (s *OLXCategoryService) streamImagesToMultipart(
+	ctx context.Context,
+	writer *multipart.Writer,
+	pipeWriter *io.PipeWriter,
+	images []CatalogImage,
+) error {
+	closeWithError := func(err error) error {
+		_ = pipeWriter.CloseWithError(err)
+		return err
+	}
+
+	for index, image := range images {
+		imageURL := strings.TrimSpace(image.URL)
+		if imageURL == "" {
+			continue
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+		if err != nil {
+			return closeWithError(fmt.Errorf("preuzimanje slike nije uspelo: %w", err))
+		}
+
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			return closeWithError(fmt.Errorf("preuzimanje slike nije uspelo: %w", err))
+		}
+
+		if resp.StatusCode >= http.StatusBadRequest {
+			responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+			return closeWithError(fmt.Errorf("preuzimanje slike nije uspelo (%d): %s", resp.StatusCode, strings.TrimSpace(string(responseBody))))
+		}
+
+		sourceContentType := resp.Header.Get("Content-Type")
+		imageBytes, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return closeWithError(fmt.Errorf("čitanje slike nije uspelo: %w", err))
+		}
+
+		uploadBytes, uploadContentType, transformed, err := prepareImageForUpload(imageBytes, sourceContentType)
+		if err != nil {
+			return closeWithError(fmt.Errorf("obrada slike nije uspela: %w", err))
+		}
+
+		if transformed {
+			log.Printf("[PUBLISH] image padded with blurred sides source=%s", imageURL)
+		}
+
+		fileName := imageFileNameFromURL(imageURL, uploadContentType, index)
+		part, err := createImageMultipartPart(writer, "images[]", fileName, uploadContentType)
+		if err != nil {
+			return closeWithError(err)
+		}
+
+		if _, err := io.Copy(part, bytes.NewReader(uploadBytes)); err != nil {
+			return closeWithError(fmt.Errorf("kopiranje slike u multipart nije uspelo: %w", err))
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return closeWithError(err)
+	}
+
+	return pipeWriter.Close()
 }
 
 func createImageMultipartPart(writer *multipart.Writer, fieldName string, fileName string, contentType string) (io.Writer, error) {

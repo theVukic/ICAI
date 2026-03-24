@@ -20,15 +20,17 @@ import (
 )
 
 const (
-	loginConfigURL              = "https://thevukic.github.io/ICAIL/login.json"
-	authCookieName              = "icai_session"
-	authRememberDuration        = 30 * 24 * time.Hour
-	authSessionDuration         = 8 * time.Hour
-	authSaltSize                = 16
-	authArgonTime        uint32 = 3
-	authArgonMemory      uint32 = 64 * 1024
-	authArgonThreads     uint8  = 4
-	authArgonKeyBytes    uint32 = 32
+	loginConfigURL                = "https://thevukic.github.io/ICAIL/login.json"
+	authCookieName                = "icai_session"
+	authRememberDuration          = 30 * 24 * time.Hour
+	authSessionDuration           = 8 * time.Hour
+	authValidationInterval        = 20 * time.Second
+	authOfflineGracePeriod        = 10 * time.Minute
+	authSaltSize                  = 16
+	authArgonTime          uint32 = 3
+	authArgonMemory        uint32 = 64 * 1024
+	authArgonThreads       uint8  = 4
+	authArgonKeyBytes      uint32 = 32
 )
 
 type pepperConfig struct {
@@ -60,13 +62,16 @@ type remoteLoginUser struct {
 }
 
 type appSession struct {
-	Token      string
-	Username   string
-	Role       string
-	Note       string
-	ExpiresAt  time.Time
-	RememberMe bool
-	CreatedAt  time.Time
+	Token                string
+	Username             string
+	Role                 string
+	Note                 string
+	UsernameLookupHash   string
+	PasswordHashSnapshot string
+	ExpiresAt            time.Time
+	RememberMe           bool
+	CreatedAt            time.Time
+	LastValidatedAt      time.Time
 }
 
 type AuthManager struct {
@@ -209,7 +214,7 @@ func (m *AuthManager) VerifyLogin(ctx context.Context, username, password string
 	return user, nil
 }
 
-func (m *AuthManager) CreateSession(username, role, note string, rememberMe bool) (appSession, error) {
+func (m *AuthManager) CreateSession(username string, user remoteLoginUser, rememberMe bool) (appSession, error) {
 	token, err := generateSessionToken()
 	if err != nil {
 		return appSession{}, err
@@ -221,13 +226,16 @@ func (m *AuthManager) CreateSession(username, role, note string, rememberMe bool
 	}
 
 	session := appSession{
-		Token:      token,
-		Username:   username,
-		Role:       role,
-		Note:       note,
-		ExpiresAt:  time.Now().UTC().Add(duration),
-		RememberMe: rememberMe,
-		CreatedAt:  time.Now().UTC(),
+		Token:                token,
+		Username:             username,
+		Role:                 user.Role,
+		Note:                 user.Note,
+		UsernameLookupHash:   user.UsernameLookupHash,
+		PasswordHashSnapshot: user.PasswordHash,
+		ExpiresAt:            time.Now().UTC().Add(duration),
+		RememberMe:           rememberMe,
+		CreatedAt:            time.Now().UTC(),
+		LastValidatedAt:      time.Now().UTC(),
 	}
 
 	m.mu.Lock()
@@ -268,6 +276,14 @@ func (m *AuthManager) GetSession(token string) (appSession, bool) {
 	if time.Now().UTC().After(session.ExpiresAt) {
 		m.DeleteSession(token)
 		return appSession{}, false
+	}
+
+	if m.shouldValidateSession(session) {
+		validatedSession, valid := m.validateSession(token, session)
+		if !valid {
+			return appSession{}, false
+		}
+		session = validatedSession
 	}
 
 	return session, true
@@ -402,6 +418,67 @@ func firstNonEmptyTrimmed(values ...string) string {
 	}
 
 	return ""
+}
+
+func (m *AuthManager) shouldValidateSession(session appSession) bool {
+	if strings.TrimSpace(session.UsernameLookupHash) == "" || strings.TrimSpace(session.PasswordHashSnapshot) == "" {
+		return true
+	}
+
+	if session.LastValidatedAt.IsZero() {
+		return true
+	}
+
+	return time.Since(session.LastValidatedAt) >= authValidationInterval
+}
+
+func (m *AuthManager) validateSession(token string, session appSession) (appSession, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	users, err := m.fetchRemoteUsers(ctx)
+	if err != nil {
+		if !session.LastValidatedAt.IsZero() && time.Since(session.LastValidatedAt) <= authOfflineGracePeriod {
+			return session, true
+		}
+
+		m.DeleteSession(token)
+		return appSession{}, false
+	}
+
+	user, found := findUserByLookupHash(users, session.UsernameLookupHash)
+	if !found || !user.Enabled || !constantTimeBase64StringEqual(user.PasswordHash, session.PasswordHashSnapshot) {
+		m.DeleteSession(token)
+		return appSession{}, false
+	}
+
+	expiresAt, err := time.Parse(time.RFC3339, user.ExpiresAt)
+	if err != nil || time.Now().UTC().After(expiresAt) {
+		m.DeleteSession(token)
+		return appSession{}, false
+	}
+
+	session.Role = user.Role
+	session.Note = user.Note
+	session.LastValidatedAt = time.Now().UTC()
+
+	m.mu.Lock()
+	currentSession, ok := m.sessions[token]
+	if !ok {
+		m.mu.Unlock()
+		return appSession{}, false
+	}
+
+	currentSession.Role = session.Role
+	currentSession.Note = session.Note
+	currentSession.LastValidatedAt = session.LastValidatedAt
+	m.sessions[token] = currentSession
+	if currentSession.RememberMe {
+		_ = m.persistRememberedSessionsLocked()
+	}
+	m.mu.Unlock()
+
+	return currentSession, true
 }
 
 func (m *AuthManager) loadPersistedSessions() {

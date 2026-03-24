@@ -110,6 +110,7 @@ const SELECTION_MODE_STORAGE_KEY = "icaiapp:selection-mode";
 const SELECT_ALL_STORAGE_KEY = "icaiapp:select-all";
 const SELECTED_TOWKODS_STORAGE_KEY = "icaiapp:selected-towkods";
 const MAIN_SCROLL_TOP_STORAGE_KEY = "icaiapp:main-scroll-top";
+const AUTH_POLL_INTERVAL_MS = 20000;
 
 type SortMode = "price-asc" | "price-desc" | "name" | "brand" | "publish-ready";
 
@@ -129,6 +130,7 @@ if (!app) {
 
 const root = app;
 mountPageTransition(root);
+let authPollTimer: number | null = null;
 
 const notyf = new Notyf({
   duration: 4200,
@@ -1440,6 +1442,34 @@ async function refreshAuthentication(force = false): Promise<void> {
   }
 }
 
+function startAuthPolling(): void {
+  stopAuthPolling();
+
+  authPollTimer = window.setInterval(() => {
+    if (!state.isAuthenticated || state.authChecking || state.authSubmitting) {
+      return;
+    }
+
+    void refreshAuthentication(true).then(async () => {
+      if (!state.isAuthenticated) {
+        await forceLogoutToLogin("Login podaci su promijenjeni. Prijavite se ponovo.");
+        return;
+      }
+
+      render();
+    });
+  }, AUTH_POLL_INTERVAL_MS);
+}
+
+function stopAuthPolling(): void {
+  if (authPollTimer === null) {
+    return;
+  }
+
+  window.clearInterval(authPollTimer);
+  authPollTimer = null;
+}
+
 function resetProtectedState(): void {
   state.data = {
     catalogs: [],
@@ -1470,6 +1500,8 @@ function resetProtectedState(): void {
 }
 
 async function forceLogoutToLogin(message = ""): Promise<void> {
+  stopAuthPolling();
+
   try {
     await logoutApp();
   } catch {
@@ -1493,9 +1525,12 @@ async function startApplication(): Promise<void> {
   state.authChecking = false;
 
   if (!state.isAuthenticated) {
+    stopAuthPolling();
     render();
     return;
   }
+
+  startAuthPolling();
 
   if (
     isDescriptionPath() ||

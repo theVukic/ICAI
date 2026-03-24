@@ -39,7 +39,7 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := a.auth.CreateSession(req.Username, user.Role, user.Note, req.RememberMe)
+	session, err := a.auth.CreateSession(req.Username, user, req.RememberMe)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ne mogu kreirati session")
 		return

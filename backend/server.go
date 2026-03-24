@@ -3,22 +3,36 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
 
+const (
+	defaultHostAlias       = "icai-app.localhost"
+	singleInstanceLockAddr = "127.0.0.1:46321"
+)
+
+var preferredPorts = []int{8080, 8081, 8082, 8083, 8084, 8090}
+
 type App struct {
 	store          *CatalogStore
 	server         *http.Server
+	listener       net.Listener
+	instanceLock   net.Listener
 	distDir        string
+	runtimeURLPath string
+	baseURL        string
 	descriptionDir string
 	olxCategories  *OLXCategoryService
 	auth           *AuthManager
@@ -47,6 +61,7 @@ func NewApp() (*App, error) {
 	app := &App{
 		store:          store,
 		distDir:        distDir,
+		runtimeURLPath: filepath.Join(os.TempDir(), "icai-app-runtime-url.txt"),
 		descriptionDir: resolveDescriptionDir([]string{filepath.Join(workDir, "description"), filepath.Join(projectDir, "description"), filepath.Join(exeDir, "description")}),
 		olxCategories: NewOLXCategoryService([]string{
 			exeDir,
@@ -70,7 +85,6 @@ func NewApp() (*App, error) {
 	app.registerRoutes(mux)
 
 	app.server = &http.Server{
-		Addr:    ":8080",
 		Handler: mux,
 	}
 
@@ -84,10 +98,28 @@ func (a *App) Run() error {
 		}
 	}()
 
+	if err := a.acquireSingleInstanceLock(); err != nil {
+		existingURL := a.readRuntimeURL()
+		if existingURL != "" {
+			openBrowser(existingURL)
+		}
+		return nil
+	}
+	defer a.releaseSingleInstanceLock()
+
+	listener, port, err := findAvailableHTTPListener(preferredPorts)
+	if err != nil {
+		return err
+	}
+	a.listener = listener
+	a.baseURL = fmt.Sprintf("http://%s:%d", defaultHostAlias, port)
+	a.persistRuntimeURL(a.baseURL)
+	defer a.clearRuntimeURL()
+
 	go a.waitForShutdown()
 	go func() {
 		time.Sleep(700 * time.Millisecond)
-		openBrowser("http://localhost:8080")
+		openBrowser(a.baseURL)
 	}()
 
 	if a.olxCategories != nil && a.olxCategories.HasToken() {
@@ -102,10 +134,10 @@ func (a *App) Run() error {
 		}
 	}
 
-	log.Printf("App running on http://localhost:8080")
+	log.Printf("App running on %s", a.baseURL)
 	log.Printf("Temp folder: %s", a.store.TempDir())
 
-	err := a.server.ListenAndServe()
+	err = a.server.Serve(a.listener)
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -186,6 +218,67 @@ func (a *App) waitForShutdown() {
 	if err := a.server.Shutdown(ctx); err != nil {
 		log.Printf("gašenje servera nije uspelo: %v", err)
 	}
+}
+
+func (a *App) acquireSingleInstanceLock() error {
+	lock, err := net.Listen("tcp", singleInstanceLockAddr)
+	if err != nil {
+		return err
+	}
+
+	a.instanceLock = lock
+	return nil
+}
+
+func (a *App) releaseSingleInstanceLock() {
+	if a.instanceLock != nil {
+		_ = a.instanceLock.Close()
+		a.instanceLock = nil
+	}
+}
+
+func (a *App) persistRuntimeURL(url string) {
+	if strings.TrimSpace(a.runtimeURLPath) == "" || strings.TrimSpace(url) == "" {
+		return
+	}
+
+	_ = os.WriteFile(a.runtimeURLPath, []byte(url), 0o600)
+}
+
+func (a *App) readRuntimeURL() string {
+	if strings.TrimSpace(a.runtimeURLPath) == "" {
+		return ""
+	}
+
+	data, err := os.ReadFile(a.runtimeURLPath)
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(string(data))
+}
+
+func (a *App) clearRuntimeURL() {
+	if strings.TrimSpace(a.runtimeURLPath) == "" {
+		return
+	}
+
+	_ = os.Remove(a.runtimeURLPath)
+}
+
+func findAvailableHTTPListener(ports []int) (net.Listener, int, error) {
+	for _, port := range ports {
+		if port <= 0 {
+			continue
+		}
+
+		listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err == nil {
+			return listener, port, nil
+		}
+	}
+
+	return nil, 0, fmt.Errorf("nijedan HTTP port nije slobodan: %v", ports)
 }
 
 func openBrowser(url string) {
