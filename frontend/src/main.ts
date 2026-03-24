@@ -1,9 +1,12 @@
 import "./style.css";
+import "notyf/notyf.min.css";
 import { mountBulkCategoryPage } from "./bulk-category";
 import { mountCategoryPage, prefetchCategoryPage } from "./category";
 import { mountBulkEditPage } from "./bulk-edit";
 import { mountDescriptionPage } from "./description";
 import { mountEditPage } from "./edit";
+import { Notyf } from "notyf";
+import { getPublishSessionStats, recordPublishSessionOutcome } from "./publish-session";
 import { fetchListingLimits, loadSessionInfo, renderSessionBadge, type ListingLimits } from "./session";
 import { mountPageTransition, navigateWithFade } from "./transition";
 
@@ -83,19 +86,29 @@ type PublishResponse = {
   listingLimits?: ListingLimits;
 };
 
+type PublishOptimisticSnapshot = {
+  data: CatalogState;
+  imageIndexes: Record<string, number>;
+  selectedTowKods: string[];
+  selectAllMode: boolean;
+  selectionPulseTowKods: string[];
+};
+
 const VIEW_MODE_STORAGE_KEY = "icaiapp:view-mode";
 const SORT_MODE_STORAGE_KEY = "icaiapp:sort-mode";
 const SELECTION_MODE_STORAGE_KEY = "icaiapp:selection-mode";
 const SELECT_ALL_STORAGE_KEY = "icaiapp:select-all";
 const SELECTED_TOWKODS_STORAGE_KEY = "icaiapp:selected-towkods";
+const MAIN_SCROLL_TOP_STORAGE_KEY = "icaiapp:main-scroll-top";
 
-type SortMode = "price-asc" | "price-desc" | "name" | "brand";
+type SortMode = "price-asc" | "price-desc" | "name" | "brand" | "publish-ready";
 
 const SORT_MODE_LABELS: Record<SortMode, string> = {
   "price-asc": "Cijena najniza",
   "price-desc": "Cijena najvisa",
   name: "Ime",
   brand: "Brend",
+  "publish-ready": "Po objavi",
 };
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -107,10 +120,18 @@ if (!app) {
 const root = app;
 mountPageTransition(root);
 
+const notyf = new Notyf({
+  duration: 4200,
+  position: { x: "right", y: "top" },
+  dismissible: false,
+  ripple: false,
+});
+
 const state: {
   data: CatalogState;
   isDragging: boolean;
   isUploading: boolean;
+  isPickingFiles: boolean;
   message: string;
   messageTone: "muted" | "success" | "danger";
   imageIndexes: Record<string, number>;
@@ -132,8 +153,7 @@ const state: {
   listingLimitRemaining: number | null;
   listingLimitUnlimited: boolean;
   listingLimitLoading: boolean;
-  publishSessionSuccessCount: number;
-  publishSessionFailedCount: number;
+  shouldRestoreMainScroll: boolean;
 } = {
   data: {
     catalogs: [],
@@ -145,6 +165,7 @@ const state: {
   },
   isDragging: false,
   isUploading: false,
+  isPickingFiles: false,
   message: "Prevuci JSON fajl ili klikni na Dodaj jos.",
   messageTone: "muted",
   imageIndexes: {},
@@ -166,8 +187,7 @@ const state: {
   listingLimitRemaining: null,
   listingLimitUnlimited: false,
   listingLimitLoading: false,
-  publishSessionSuccessCount: 0,
-  publishSessionFailedCount: 0,
+  shouldRestoreMainScroll: false,
 };
 
 const plusIcon = `
@@ -302,6 +322,8 @@ const descriptionIcon = `
 `;
 
 function render(): void {
+  const publishSessionStats = getPublishSessionStats();
+
   if (isDescriptionPath()) {
     mountDescriptionPage(root);
     return;
@@ -604,13 +626,13 @@ function render(): void {
                 : ""
             }
             ${
-              state.publishSessionSuccessCount > 0
-                ? `<span class="footer-publish-success">${state.publishSessionSuccessCount}</span>`
+              publishSessionStats.successCount > 0
+                ? `<span class="footer-publish-success">${publishSessionStats.successCount}</span>`
                 : ""
             }
             ${
-              state.publishSessionFailedCount > 0
-                ? `<span class="footer-publish-failed">${state.publishSessionFailedCount}</span>`
+              publishSessionStats.failedCount > 0
+                ? `<span class="footer-publish-failed">${publishSessionStats.failedCount}</span>`
                 : ""
             }
           </div>
@@ -663,7 +685,10 @@ function bindEvents(): void {
     return;
   }
 
-  const openPicker = () => fileInput.click();
+  const openPicker = () => {
+    state.isPickingFiles = true;
+    fileInput.click();
+  };
   uploadButton.addEventListener("click", openPicker);
   sortButton?.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -742,6 +767,7 @@ function bindEvents(): void {
       return;
     }
 
+    saveMainScrollPosition();
     navigateWithFade(root, "/edit-selected");
   });
   categorySelectedButton?.addEventListener("click", () => {
@@ -749,6 +775,7 @@ function bindEvents(): void {
       return;
     }
 
+    saveMainScrollPosition();
     navigateWithFade(root, "/category-selected");
   });
   deleteSelectedButton?.addEventListener("click", async () => {
@@ -796,6 +823,7 @@ function bindEvents(): void {
     }
   });
   descriptionButton?.addEventListener("click", () => {
+    saveMainScrollPosition();
     navigateWithFade(root, "/description");
   });
 
@@ -810,6 +838,18 @@ function bindEvents(): void {
       render();
       return;
     }
+
+    const publishTowKods = getPublishCandidateTowKods();
+    if (publishTowKods.length === 0) {
+      state.message = "Nema artikala za objavu.";
+      state.messageTone = "danger";
+      showPublishErrorToast(0);
+      render();
+      return;
+    }
+
+    const requestSelectedTowKods = [...state.selectedTowKods];
+    const optimisticSnapshot = createPublishOptimisticSnapshot();
 
     console.log("[PUBLISH] click", {
       selectedTowKods: state.selectedTowKods,
@@ -828,19 +868,22 @@ function bindEvents(): void {
         ? "Objavljujem selektovane artikle sa zelenom kategorizacijom..."
         : "Objavljujem sve artikle sa zelenom kategorizacijom...";
     state.messageTone = "muted";
+    applyOptimisticPublishRemoval(publishTowKods);
     render();
 
     try {
       await refreshListingLimits();
       if (isPublishBlocked()) {
+        restorePublishSnapshot(optimisticSnapshot);
         state.message = "Dostignut je other listing limit. Objava je blokirana dok se limit ne oslobodi.";
         state.messageTone = "danger";
+        showPublishErrorToast(publishTowKods.length);
         render();
         return;
       }
 
       const requestBody = {
-        selectedTowKods: state.selectedTowKods,
+        selectedTowKods: requestSelectedTowKods,
       };
       console.log("[PUBLISH] request body", requestBody);
 
@@ -872,8 +915,7 @@ function bindEvents(): void {
           state.listingLimitRemaining - publishData.published.length,
         );
       }
-      state.publishSessionSuccessCount += publishData.published.length;
-      state.publishSessionFailedCount += publishData.failed.length;
+      recordPublishSessionOutcome(publishData.published.length, publishData.failed.length);
       state.imageIndexes = filterImageIndexesByItems(state.imageIndexes, state.data.items);
       state.selectedTowKods = state.selectedTowKods.filter((towKod) =>
         state.data.items.some((item) => item.towKod === towKod),
@@ -896,11 +938,14 @@ function bindEvents(): void {
           : publishData.published.length > 0
             ? "success"
             : "muted";
+      showPublishOutcomeToasts(publishData.published.length, publishData.failed.length);
     } catch (error) {
+      restorePublishSnapshot(optimisticSnapshot);
       console.error("[PUBLISH] frontend error", error);
       state.message =
         error instanceof Error ? error.message : "Objava nije uspela.";
       state.messageTone = "danger";
+      showPublishErrorToast(publishTowKods.length);
     } finally {
       state.isPublishing = false;
       render();
@@ -954,6 +999,7 @@ function bindEvents(): void {
   }
 
   fileInput.addEventListener("change", async () => {
+    state.isPickingFiles = false;
     const files = fileInput.files ? Array.from(fileInput.files) : [];
     await uploadFiles(files);
     fileInput.value = "";
@@ -1046,6 +1092,7 @@ function bindEvents(): void {
         return;
       }
 
+      saveMainScrollPosition();
       navigateWithFade(root, `/edit/${encodeURIComponent(code)}`);
     });
   }
@@ -1069,8 +1116,13 @@ function bindEvents(): void {
       }
 
       await prefetchCategoryPage(code);
+      saveMainScrollPosition();
       navigateWithFade(root, `/category/${encodeURIComponent(code)}`);
     });
+  }
+
+  if (state.shouldRestoreMainScroll) {
+    restoreMainScrollPosition();
   }
 }
 
@@ -1092,14 +1144,26 @@ async function loadState(): Promise<void> {
       throw new Error("error" in data ? data.error : "Ucitavanje nije uspelo.");
     }
 
-    state.data = data as CatalogState;
+    const nextData = data as CatalogState;
     applyListingLimits(await limitsPromise);
-    state.imageIndexes = {};
-    reconcileSelectionState();
-    scheduleCategoryPrefetch(state.data.items);
-    if (state.data.totalItems > 0) {
+    if (!state.isPublishing && !state.isUploading && !state.isPickingFiles) {
+      state.data = nextData;
+      state.imageIndexes = {};
+      reconcileSelectionState();
+      scheduleCategoryPrefetch(state.data.items);
+    }
+    if (
+      !state.isPublishing &&
+      !state.isUploading &&
+      !state.isPickingFiles &&
+      state.data.totalItems > 0
+    ) {
       state.message = "Artikli su ucitani.";
       state.messageTone = "success";
+    }
+
+    if (state.shouldRestoreMainScroll) {
+      restoreMainScrollPosition();
     }
   } catch (error) {
     state.message =
@@ -1158,14 +1222,51 @@ function isPublishBlocked(): boolean {
 }
 
 function refreshMainPageFromStore(): void {
-  if (getEditTowKodFromPath()) {
+  if (
+    isDescriptionPath() ||
+    isBulkCategoryPath() ||
+    isBulkEditPath() ||
+    Boolean(getEditTowKodFromPath()) ||
+    Boolean(getCategoryTowKodFromPath()) ||
+    state.isPublishing ||
+    state.isUploading ||
+    state.isPickingFiles
+  ) {
     return;
   }
 
+  render();
   void loadState();
 }
 
+function saveMainScrollPosition(): void {
+  if (!isMainPath()) {
+    return;
+  }
+
+  window.sessionStorage.setItem(
+    MAIN_SCROLL_TOP_STORAGE_KEY,
+    String(Math.max(0, Math.round(window.scrollY))),
+  );
+}
+
+function restoreMainScrollPosition(): void {
+  const rawValue = window.sessionStorage.getItem(MAIN_SCROLL_TOP_STORAGE_KEY);
+  const scrollTop = Number(rawValue);
+
+  state.shouldRestoreMainScroll = false;
+
+  if (!Number.isFinite(scrollTop) || scrollTop <= 0) {
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    window.scrollTo({ top: scrollTop, behavior: "auto" });
+  });
+}
+
 async function uploadFiles(files: File[]): Promise<void> {
+  state.isPickingFiles = false;
   const jsonFiles = files.filter((file) =>
     file.name.toLowerCase().endsWith(".json"),
   );
@@ -1320,6 +1421,74 @@ function scheduleCategoryPrefetch(items: CatalogItem[]): void {
   }
 }
 
+function getPublishCandidateTowKods(): string[] {
+  const hasSelection = state.selectedTowKods.length > 0;
+  const selectedSet = new Set(state.selectedTowKods);
+
+  return state.data.items
+    .filter((item) => {
+      if (!item.towKod) {
+        return false;
+      }
+
+      if (hasSelection) {
+        return selectedSet.has(item.towKod);
+      }
+
+      return Boolean(item.categorization?.category?.id);
+    })
+    .map((item) => item.towKod);
+}
+
+function createPublishOptimisticSnapshot(): PublishOptimisticSnapshot {
+  return {
+    data: state.data,
+    imageIndexes: { ...state.imageIndexes },
+    selectedTowKods: [...state.selectedTowKods],
+    selectAllMode: state.selectAllMode,
+    selectionPulseTowKods: [...state.selectionPulseTowKods],
+  };
+}
+
+function applyOptimisticPublishRemoval(publishTowKods: string[]): void {
+  const publishSet = new Set(publishTowKods);
+  const nextItems = state.data.items.filter((item) => !publishSet.has(item.towKod));
+
+  state.data = {
+    ...state.data,
+    items: nextItems,
+    totalItems: nextItems.length,
+  };
+  state.imageIndexes = filterImageIndexesByItems(state.imageIndexes, nextItems);
+  state.selectedTowKods = state.selectedTowKods.filter((towKod) => !publishSet.has(towKod));
+  state.selectionPulseTowKods = state.selectionPulseTowKods.filter((towKod) => !publishSet.has(towKod));
+  reconcileSelectionState();
+}
+
+function restorePublishSnapshot(snapshot: PublishOptimisticSnapshot): void {
+  state.data = snapshot.data;
+  state.imageIndexes = snapshot.imageIndexes;
+  state.selectedTowKods = snapshot.selectedTowKods;
+  state.selectAllMode = snapshot.selectAllMode;
+  state.selectionPulseTowKods = snapshot.selectionPulseTowKods;
+  reconcileSelectionState();
+}
+
+function showPublishOutcomeToasts(successCount: number, failedCount: number): void {
+  if (successCount > 0) {
+    notyf.success(`Uspjesno ste objavili ${successCount} artikala!`);
+  }
+
+  if (failedCount > 0) {
+    notyf.error(`Neuspjesno ste objavili ${failedCount} artikala!`);
+  }
+}
+
+function showPublishErrorToast(failedCount: number): void {
+  const safeCount = Math.max(1, failedCount);
+  notyf.error(`Neuspjesno ste objavili ${safeCount} artikala!`);
+}
+
 function getSelectableTowKods(items: CatalogItem[]): string[] {
   return items
     .map((item) => item.towKod)
@@ -1388,7 +1557,8 @@ function isSortMode(value: string | null): value is SortMode {
     value === "price-asc" ||
     value === "price-desc" ||
     value === "name" ||
-    value === "brand"
+    value === "brand" ||
+    value === "publish-ready"
   );
 }
 
@@ -1408,9 +1578,17 @@ function compareCatalogItems(
       return compareNumbers(right.retailPrice, left.retailPrice) || compareByName(left, right);
     case "brand":
       return compareText(left.brandName, right.brandName) || compareByName(left, right);
+    case "publish-ready":
+      return comparePublishReady(right, left) || compareByName(left, right);
     case "name":
       return compareByName(left, right);
   }
+}
+
+function comparePublishReady(left: CatalogItem, right: CatalogItem): number {
+  const leftReady = left.categorization?.category?.id ? 1 : 0;
+  const rightReady = right.categorization?.category?.id ? 1 : 0;
+  return leftReady - rightReady;
 }
 
 function compareByName(left: CatalogItem, right: CatalogItem): number {
@@ -1490,10 +1668,49 @@ if (isDescriptionPath()) {
   }
 }
 
+function isMainPath(): boolean {
+  return window.location.pathname === "/";
+}
+
+window.addEventListener("popstate", () => {
+  if (
+    isDescriptionPath() ||
+    isBulkCategoryPath() ||
+    isBulkEditPath() ||
+    Boolean(getEditTowKodFromPath()) ||
+    Boolean(getCategoryTowKodFromPath())
+  ) {
+    render();
+    return;
+  }
+
+  state.shouldRestoreMainScroll = true;
+  render();
+  void loadState();
+});
+
 window.addEventListener("pageshow", () => {
+  if (state.isPickingFiles) {
+    window.setTimeout(() => {
+      state.isPickingFiles = false;
+    }, 300);
+  }
+
   refreshMainPageFromStore();
 });
 
 window.addEventListener("focus", () => {
   refreshMainPageFromStore();
 });
+
+window.addEventListener(
+  "scroll",
+  () => {
+    if (!isMainPath()) {
+      return;
+    }
+
+    saveMainScrollPosition();
+  },
+  { passive: true },
+);

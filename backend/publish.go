@@ -87,7 +87,10 @@ func (a *App) handleCatalogPublish(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[PUBLISH] request received selectedTowKods=%v", req.SelectedTowKods)
 
-	response, status, err := a.publishCatalogItems(r.Context(), req.SelectedTowKods)
+	publishCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	response, status, err := a.publishCatalogItems(publishCtx, req.SelectedTowKods)
 	if err != nil {
 		log.Printf("[PUBLISH] request failed status=%d error=%v", status, err)
 		writeError(w, status, err.Error())

@@ -1,6 +1,7 @@
 import Quill from "quill";
 import "quill/dist/quill.snow.css";
 import { navigateWithFade } from "./transition";
+import { renderPublishSessionBadge } from "./publish-session";
 import { loadSessionInfo, renderSessionBadge } from "./session";
 
 const backIcon = `
@@ -99,6 +100,7 @@ function renderDescriptionPage(root: HTMLDivElement): void {
           <div class="logo-mark">IC</div>
           <strong>ICAI</strong>
           ${renderSessionBadge(state.tokenConfigured ? { tokenConfigured: true, username: state.sessionUsername, fullName: "" } : null)}
+          ${renderPublishSessionBadge()}
         </div>
       </header>
 

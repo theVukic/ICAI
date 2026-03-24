@@ -1,4 +1,5 @@
 import { navigateWithFade } from "./transition";
+import { renderPublishSessionBadge } from "./publish-session";
 import { loadSessionInfo, renderSessionBadge } from "./session";
 
 const SELECTED_TOWKODS_STORAGE_KEY = "icaiapp:selected-towkods";
@@ -136,6 +137,7 @@ function renderBulkEditPage(root: HTMLDivElement): void {
           <div class="logo-mark">IC</div>
           <strong>ICAI</strong>
           ${renderSessionBadge(state.tokenConfigured ? { tokenConfigured: true, username: state.sessionUsername, fullName: "" } : null)}
+          ${renderPublishSessionBadge()}
         </div>
       </header>
 
