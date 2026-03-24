@@ -6,6 +6,8 @@ type SessionInfo = {
 
 export type ListingLimits = {
   tokenConfigured: boolean;
+  unlimited: boolean;
+  segment: string;
   remaining: number;
   totalLimit: number;
   totalListings: number;

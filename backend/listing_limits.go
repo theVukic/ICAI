@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"time"
 )
 
@@ -62,38 +61,37 @@ func (s *OLXCategoryService) GetListingLimits(ctx context.Context) (ListingLimit
 		return ListingLimitsResponse{}, fmt.Errorf("OLX listing-limits odgovor nije validan")
 	}
 
-	segments := make([]ListingLimitSegment, 0, len(wrapped.Data))
-	totalLimit := 0
-	totalListings := 0
-	remaining := 0
-
-	for segment, stats := range wrapped.Data {
-		segmentRemaining := stats.Limit - stats.Listings
-		if segmentRemaining < 0 {
-			segmentRemaining = 0
-		}
-
-		totalLimit += stats.Limit
-		totalListings += stats.Listings
-		remaining += segmentRemaining
-
-		segments = append(segments, ListingLimitSegment{
-			Segment:   segment,
-			Limit:     stats.Limit,
-			Listings:  stats.Listings,
-			Remaining: segmentRemaining,
-		})
+	stats, ok := wrapped.Data["other"]
+	if !ok {
+		return ListingLimitsResponse{}, fmt.Errorf("OLX listing-limits odgovor nema other segment")
 	}
 
-	sort.SliceStable(segments, func(left int, right int) bool {
-		return segments[left].Segment < segments[right].Segment
-	})
+	remaining := stats.Limit - stats.Listings
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	unlimited := stats.Limit == 0
+	if unlimited {
+		remaining = 0
+	}
+
+	segments := []ListingLimitSegment{
+		{
+			Segment:   "other",
+			Limit:     stats.Limit,
+			Listings:  stats.Listings,
+			Remaining: remaining,
+		},
+	}
 
 	return ListingLimitsResponse{
 		TokenConfigured: true,
+		Unlimited:       unlimited,
+		Segment:         "other",
 		Remaining:       remaining,
-		TotalLimit:      totalLimit,
-		TotalListings:   totalListings,
+		TotalLimit:      stats.Limit,
+		TotalListings:   stats.Listings,
 		CheckedAt:       time.Now().Format(time.RFC3339),
 		Segments:        segments,
 	}, nil

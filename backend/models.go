@@ -164,6 +164,8 @@ type ListingLimitSegment struct {
 
 type ListingLimitsResponse struct {
 	TokenConfigured bool                  `json:"tokenConfigured"`
+	Unlimited       bool                  `json:"unlimited"`
+	Segment         string                `json:"segment"`
 	Remaining       int                   `json:"remaining"`
 	TotalLimit      int                   `json:"totalLimit"`
 	TotalListings   int                   `json:"totalListings"`

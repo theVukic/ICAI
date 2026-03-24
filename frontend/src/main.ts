@@ -130,6 +130,7 @@ const state: {
   sessionUsername: string;
   tokenConfigured: boolean;
   listingLimitRemaining: number | null;
+  listingLimitUnlimited: boolean;
   listingLimitLoading: boolean;
   publishSessionSuccessCount: number;
   publishSessionFailedCount: number;
@@ -163,6 +164,7 @@ const state: {
   sessionUsername: "",
   tokenConfigured: false,
   listingLimitRemaining: null,
+  listingLimitUnlimited: false,
   listingLimitLoading: false,
   publishSessionSuccessCount: 0,
   publishSessionFailedCount: 0,
@@ -589,7 +591,7 @@ function render(): void {
           </div>
           <div class="toolbar-action">
             <button class="publish-button" id="publishButton" type="button" ${
-              state.isPublishing ? "disabled" : ""
+              state.isPublishing || isPublishBlocked() ? "disabled" : ""
             }>
               <span class="button-icon">${publishIcon}</span>
             </button>
@@ -598,7 +600,7 @@ function render(): void {
           <div class="footer-publish-metrics" aria-live="polite">
             ${
               state.tokenConfigured && (state.listingLimitRemaining !== null || state.listingLimitLoading)
-                ? `<span class="footer-publish-limit${state.listingLimitLoading && state.listingLimitRemaining === null ? " is-loading" : ""}">${state.listingLimitRemaining ?? "..."}</span>`
+                ? `<span class="footer-publish-limit${state.listingLimitLoading && state.listingLimitRemaining === null ? " is-loading" : ""}">${state.listingLimitUnlimited ? "∞" : state.listingLimitRemaining ?? "..."}</span>`
                 : ""
             }
             ${
@@ -802,6 +804,13 @@ function bindEvents(): void {
       return;
     }
 
+    if (isPublishBlocked()) {
+      state.message = "Dostignut je other listing limit. Objava je blokirana dok se limit ne oslobodi.";
+      state.messageTone = "danger";
+      render();
+      return;
+    }
+
     console.log("[PUBLISH] click", {
       selectedTowKods: state.selectedTowKods,
       totalItems: state.data.items.length,
@@ -823,6 +832,12 @@ function bindEvents(): void {
 
     try {
       await refreshListingLimits();
+      if (isPublishBlocked()) {
+        state.message = "Dostignut je other listing limit. Objava je blokirana dok se limit ne oslobodi.";
+        state.messageTone = "danger";
+        render();
+        return;
+      }
 
       const requestBody = {
         selectedTowKods: state.selectedTowKods,
@@ -851,7 +866,7 @@ function bindEvents(): void {
       state.data = publishData.state;
       if (publishData.listingLimits) {
         applyListingLimits(publishData.listingLimits);
-      } else if (state.listingLimitRemaining !== null) {
+      } else if (state.listingLimitRemaining !== null && !state.listingLimitUnlimited) {
         state.listingLimitRemaining = Math.max(
           0,
           state.listingLimitRemaining - publishData.published.length,
@@ -1125,10 +1140,21 @@ async function fetchCurrentListingLimits(): Promise<ListingLimits | null> {
 function applyListingLimits(limits: ListingLimits | null): void {
   if (!limits || !limits.tokenConfigured) {
     state.listingLimitRemaining = null;
+    state.listingLimitUnlimited = false;
     return;
   }
 
-  state.listingLimitRemaining = Math.max(0, limits.remaining);
+  state.listingLimitUnlimited = limits.unlimited;
+  state.listingLimitRemaining = limits.unlimited ? 0 : Math.max(0, limits.remaining);
+}
+
+function isPublishBlocked(): boolean {
+  return (
+    state.tokenConfigured &&
+    !state.listingLimitUnlimited &&
+    state.listingLimitRemaining !== null &&
+    state.listingLimitRemaining <= 0
+  );
 }
 
 function refreshMainPageFromStore(): void {
