@@ -1,13 +1,22 @@
 import "./style.css";
 import "notyf/notyf.min.css";
-import { mountBulkCategoryPage } from "./bulk-category";
-import { mountCategoryPage, prefetchCategoryPage } from "./category";
-import { mountBulkEditPage } from "./bulk-edit";
-import { mountDescriptionPage } from "./description";
-import { mountEditPage } from "./edit";
+import { mountBulkCategoryPage, setBulkCategoryPageSession } from "./bulk-category";
+import { mountCategoryPage, prefetchCategoryPage, setCategoryPageSession } from "./category";
+import { mountBulkEditPage, setBulkEditPageSession } from "./bulk-edit";
+import { mountDescriptionPage, setDescriptionPageSession } from "./description";
+import { mountEditPage, setEditPageSession } from "./edit";
+import { renderAuthLoading, renderLoginScreen } from "./login";
 import { Notyf } from "notyf";
 import { getPublishSessionStats, recordPublishSessionOutcome } from "./publish-session";
-import { fetchListingLimits, loadSessionInfo, renderSessionBadge, type ListingLimits } from "./session";
+import {
+  fetchListingLimits,
+  loadSessionInfo,
+  loginApp,
+  logoutApp,
+  switchOlxToken,
+  resetSessionInfoCache,
+  type ListingLimits,
+} from "./session";
 import { mountPageTransition, navigateWithFade } from "./transition";
 import { renderAppBrand } from "./branding";
 
@@ -151,6 +160,18 @@ const state: {
   animateItemsIn: boolean;
   sessionUsername: string;
   tokenConfigured: boolean;
+  isAuthenticated: boolean;
+  authChecking: boolean;
+  authSubmitting: boolean;
+  authError: string;
+  showFieldError: boolean;
+  appUsername: string;
+  appRole: string;
+  rememberMe: boolean;
+  olxProfileName: string;
+  olxAvailableTokens: string[];
+  olxTokenMenuOpen: boolean;
+  olxTokenSwitching: boolean;
   listingLimitRemaining: number | null;
   listingLimitUnlimited: boolean;
   listingLimitLoading: boolean;
@@ -186,6 +207,18 @@ const state: {
   animateItemsIn: false,
   sessionUsername: "",
   tokenConfigured: false,
+  isAuthenticated: false,
+  authChecking: true,
+  authSubmitting: false,
+  authError: "",
+  showFieldError: false,
+  appUsername: "",
+  appRole: "",
+  rememberMe: false,
+  olxProfileName: "",
+  olxAvailableTokens: [],
+  olxTokenMenuOpen: false,
+  olxTokenSwitching: false,
   listingLimitRemaining: null,
   listingLimitUnlimited: false,
   listingLimitLoading: false,
@@ -324,32 +357,135 @@ const descriptionIcon = `
   </svg>
 `;
 
+function renderAuthenticatedBadge(): string {
+  if (!state.tokenConfigured || !state.sessionUsername) {
+    return "";
+  }
+
+  const showSelector = state.olxAvailableTokens.length > 1;
+  const currentLabel = escapeHtml(state.sessionUsername);
+
+  if (!showSelector) {
+    return `
+      <div class="session-badge olx-header-badge">
+        <span>OLX</span>
+        <strong>${currentLabel}</strong>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="olx-token-picker">
+      <button
+        class="session-badge olx-header-badge olx-token-trigger ${state.olxTokenMenuOpen ? "is-open" : ""}"
+        id="olxTokenTrigger"
+        type="button"
+        aria-expanded="${state.olxTokenMenuOpen ? "true" : "false"}"
+        ${state.olxTokenSwitching ? "disabled" : ""}
+      >
+        <span>OLX</span>
+        <strong>${currentLabel}</strong>
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M5.5 7.5 10 12l4.5-4.5" />
+        </svg>
+      </button>
+      ${
+        state.olxTokenMenuOpen
+          ? `
+            <div class="olx-token-menu" id="olxTokenMenu">
+              ${state.olxAvailableTokens
+                .map((tokenName) => {
+                  const selected = tokenName === (state.olxProfileName || state.sessionUsername);
+                  return `
+                    <button
+                      class="olx-token-option ${selected ? "is-active" : ""}"
+                      type="button"
+                      data-olx-token="${escapeHtml(tokenName)}"
+                      ${state.olxTokenSwitching ? "disabled" : ""}
+                    >
+                      ${escapeHtml(tokenName)}
+                    </button>
+                  `;
+                })
+                .join("")}
+            </div>
+          `
+          : ""
+      }
+    </div>
+  `;
+}
+
 function render(): void {
+  if (state.authChecking) {
+    renderAuthLoading(root);
+    return;
+  }
+
+  if (!state.isAuthenticated) {
+    renderLoginScreen(root, state, async ({ username, password, rememberMe }) => {
+      if (!username || !password) {
+        state.authError = "";
+        state.showFieldError = true;
+        render();
+        return;
+      }
+
+      state.authSubmitting = true;
+      state.authError = "";
+      state.showFieldError = false;
+      state.rememberMe = rememberMe;
+      render();
+
+      try {
+        await loginApp(username, password, rememberMe);
+        state.showFieldError = false;
+        await refreshAuthentication(true);
+        await startApplication();
+      } catch (error) {
+        state.authSubmitting = false;
+        state.authError = error instanceof Error ? error.message : "Login nije uspio.";
+        state.showFieldError = true;
+        render();
+      }
+    });
+    return;
+  }
+
   const publishSessionStats = getPublishSessionStats();
 
   if (isDescriptionPath()) {
+    setDescriptionPageSession(
+      state.sessionUsername,
+      state.tokenConfigured,
+      state.olxProfileName,
+    );
     mountDescriptionPage(root);
     return;
   }
 
   if (isBulkCategoryPath()) {
+    setBulkCategoryPageSession(state.sessionUsername, state.tokenConfigured);
     mountBulkCategoryPage(root);
     return;
   }
 
   if (isBulkEditPath()) {
+    setBulkEditPageSession(state.sessionUsername, state.tokenConfigured);
     mountBulkEditPage(root);
     return;
   }
 
   const editTowKod = getEditTowKodFromPath();
   if (editTowKod) {
+    setEditPageSession(state.sessionUsername, state.tokenConfigured);
     mountEditPage(root, editTowKod);
     return;
   }
 
   const categoryTowKod = getCategoryTowKodFromPath();
   if (categoryTowKod) {
+    setCategoryPageSession(state.sessionUsername, state.tokenConfigured);
     mountCategoryPage(root, categoryTowKod);
     return;
   }
@@ -440,13 +576,7 @@ function render(): void {
   root.innerHTML = `
     <div class="shell">
       <header class="topbar">
-        ${renderAppBrand(
-          renderSessionBadge(
-            state.tokenConfigured
-              ? { tokenConfigured: true, username: state.sessionUsername, fullName: "" }
-              : null,
-          ),
-        )}
+        ${renderAppBrand(renderAuthenticatedBadge())}
         <div class="header-actions">
         ${
           state.selectionToolsVisible
@@ -558,6 +688,18 @@ function render(): void {
             <span class="button-icon">${plusIcon}</span>
           </button>
           <span class="action-label action-label-upload">DODAJ</span>
+        </div>
+        <div class="toolbar-action">
+          <button class="header-icon-button logout-button" id="logoutButton" type="button" aria-label="Odjava">
+            <span class="button-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" />
+                <path d="M16 16l4-4-4-4" />
+                <path d="M20 12H9" />
+              </svg>
+            </span>
+          </button>
+          <span class="action-label action-label-toggle">ODJAVA</span>
         </div>
         </div>
       </header>
@@ -679,6 +821,14 @@ function bindEvents(): void {
     document.querySelector<HTMLButtonElement>("#descriptionButton");
   const publishButton =
     document.querySelector<HTMLButtonElement>("#publishButton");
+  const logoutButton =
+    document.querySelector<HTMLButtonElement>("#logoutButton");
+  const olxTokenTrigger =
+    document.querySelector<HTMLButtonElement>("#olxTokenTrigger");
+  const olxTokenMenu =
+    document.querySelector<HTMLElement>("#olxTokenMenu");
+  const olxTokenOptions =
+    document.querySelectorAll<HTMLButtonElement>("[data-olx-token]");
   const imageButtons =
     document.querySelectorAll<HTMLButtonElement>("[data-image-nav]");
   const editButtons =
@@ -688,6 +838,58 @@ function bindEvents(): void {
 
   if (!fileInput || !uploadButton || !clearButton) {
     return;
+  }
+
+  logoutButton?.addEventListener("click", async () => {
+    await forceLogoutToLogin();
+  });
+
+  olxTokenTrigger?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    state.olxTokenMenuOpen = !state.olxTokenMenuOpen;
+    if (state.olxTokenMenuOpen) {
+      window.setTimeout(() => {
+        document.addEventListener("click", handleOlxTokenMenuOutsideClick, {
+          once: true,
+        });
+      }, 0);
+    }
+    render();
+  });
+
+  olxTokenMenu?.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+
+  for (const button of olxTokenOptions) {
+    button.addEventListener("click", async () => {
+      const tokenName = button.dataset.olxToken;
+      if (!tokenName || state.olxTokenSwitching) {
+        return;
+      }
+
+      state.olxTokenSwitching = true;
+      state.olxTokenMenuOpen = false;
+      render();
+
+      try {
+        const session = await switchOlxToken(tokenName);
+        state.sessionUsername = session.username || "";
+        state.tokenConfigured = session.tokenConfigured;
+        state.olxProfileName = session.profileName || "";
+        state.olxAvailableTokens = session.availableTokens || [];
+        await refreshListingLimits();
+        render();
+      } catch (error) {
+        state.message =
+          error instanceof Error ? error.message : "Promjena OLX tokena nije uspjela.";
+        state.messageTone = "danger";
+        render();
+      } finally {
+        state.olxTokenSwitching = false;
+        render();
+      }
+    });
   }
 
   const openPicker = () => {
@@ -1143,6 +1345,17 @@ async function loadState(): Promise<void> {
     const session = await loadSessionInfo();
     state.sessionUsername = session.username || "";
     state.tokenConfigured = session.tokenConfigured;
+    state.isAuthenticated = session.authenticated === true;
+    state.appUsername = session.appUsername || "";
+    state.appRole = session.appRole || "";
+    state.olxProfileName = session.profileName || "";
+    state.olxAvailableTokens = session.availableTokens || [];
+
+    if (!state.isAuthenticated) {
+      await forceLogoutToLogin("Morate se ponovo prijaviti.");
+      return;
+    }
+
     state.listingLimitLoading = state.tokenConfigured;
 
     const limitsPromise = state.tokenConfigured
@@ -1150,6 +1363,10 @@ async function loadState(): Promise<void> {
       : Promise.resolve<ListingLimits | null>(null);
 
     const response = await fetch("/api/catalog");
+    if (response.status === 401) {
+      await forceLogoutToLogin("Session je istekao. Prijavite se ponovo.");
+      return;
+    }
     const data = (await response.json()) as CatalogResponse;
 
     if (!response.ok) {
@@ -1191,6 +1408,107 @@ async function loadState(): Promise<void> {
     state.listingLimitLoading = false;
     render();
   }
+}
+
+async function refreshAuthentication(force = false): Promise<void> {
+  state.authChecking = true;
+  state.authSubmitting = false;
+
+  if (force) {
+    resetSessionInfoCache();
+  }
+
+  try {
+    const session = await loadSessionInfo();
+    state.isAuthenticated = session.authenticated === true;
+    state.sessionUsername = session.username || "";
+    state.tokenConfigured = session.tokenConfigured;
+    state.appUsername = session.appUsername || "";
+    state.appRole = session.appRole || "";
+    state.olxProfileName = session.profileName || "";
+    state.olxAvailableTokens = session.availableTokens || [];
+  } catch {
+    state.isAuthenticated = false;
+    state.sessionUsername = "";
+    state.tokenConfigured = false;
+    state.appUsername = "";
+    state.appRole = "";
+    state.olxProfileName = "";
+    state.olxAvailableTokens = [];
+  } finally {
+    state.authChecking = false;
+  }
+}
+
+function resetProtectedState(): void {
+  state.data = {
+    catalogs: [],
+    items: [],
+    tempDir: "",
+    totalFiles: 0,
+    totalItems: 0,
+    lastUpdated: null,
+  };
+  state.imageIndexes = {};
+  state.selectedTowKods = [];
+  state.selectionPulseTowKods = [];
+  state.selectAllMode = false;
+  state.isPublishing = false;
+  state.isUploading = false;
+  state.isPickingFiles = false;
+  state.listingLimitRemaining = null;
+  state.listingLimitUnlimited = false;
+  state.listingLimitLoading = false;
+  state.sessionUsername = "";
+  state.tokenConfigured = false;
+  state.appUsername = "";
+  state.appRole = "";
+  state.olxProfileName = "";
+  state.olxAvailableTokens = [];
+  state.olxTokenMenuOpen = false;
+  state.olxTokenSwitching = false;
+}
+
+async function forceLogoutToLogin(message = ""): Promise<void> {
+  try {
+    await logoutApp();
+  } catch {
+    resetSessionInfoCache();
+  }
+
+  resetProtectedState();
+  state.isAuthenticated = false;
+  state.authChecking = false;
+  state.authSubmitting = false;
+  state.authError = message;
+  state.showFieldError = false;
+  if (!isMainPath()) {
+    window.history.replaceState({}, "", "/");
+  }
+  render();
+}
+
+async function startApplication(): Promise<void> {
+  state.authSubmitting = false;
+  state.authChecking = false;
+
+  if (!state.isAuthenticated) {
+    render();
+    return;
+  }
+
+  if (
+    isDescriptionPath() ||
+    isBulkCategoryPath() ||
+    isBulkEditPath() ||
+    Boolean(getEditTowKodFromPath()) ||
+    Boolean(getCategoryTowKodFromPath())
+  ) {
+    render();
+    return;
+  }
+
+  await loadState();
 }
 
 async function refreshListingLimits(): Promise<void> {
@@ -1435,6 +1753,15 @@ function saveStoredSelectedTowKods(values: string[]): void {
   );
 }
 
+function handleOlxTokenMenuOutsideClick(): void {
+  if (!state.olxTokenMenuOpen) {
+    return;
+  }
+
+  state.olxTokenMenuOpen = false;
+  render();
+}
+
 function scheduleCategoryPrefetch(items: CatalogItem[]): void {
   const towKods = items
     .map((item) => item.towKod)
@@ -1677,31 +2004,16 @@ function getCategoryTowKodFromPath(): string | null {
   }
 }
 
-if (isDescriptionPath()) {
-  mountDescriptionPage(root);
-} else if (isBulkCategoryPath()) {
-  mountBulkCategoryPage(root);
-} else if (isBulkEditPath()) {
-  mountBulkEditPage(root);
-} else {
-  const editTowKod = getEditTowKodFromPath();
-  if (editTowKod) {
-    mountEditPage(root, editTowKod);
-  } else {
-    const categoryTowKod = getCategoryTowKodFromPath();
-    if (categoryTowKod) {
-      mountCategoryPage(root, categoryTowKod);
-    } else {
-      void loadState();
-    }
-  }
-}
-
 function isMainPath(): boolean {
   return window.location.pathname === "/";
 }
 
 window.addEventListener("popstate", () => {
+  if (!state.isAuthenticated) {
+    render();
+    return;
+  }
+
   if (
     isDescriptionPath() ||
     isBulkCategoryPath() ||
@@ -1725,10 +2037,22 @@ window.addEventListener("pageshow", () => {
     }, 300);
   }
 
+  if (!state.isAuthenticated) {
+    render();
+    return;
+  }
+
   refreshMainPageFromStore();
 });
 
 window.addEventListener("focus", () => {
+  if (!state.isAuthenticated) {
+    void refreshAuthentication(true).then(() => {
+      render();
+    });
+    return;
+  }
+
   refreshMainPageFromStore();
 });
 
@@ -1743,3 +2067,8 @@ window.addEventListener(
   },
   { passive: true },
 );
+
+void (async () => {
+  await refreshAuthentication(true);
+  await startApplication();
+})();

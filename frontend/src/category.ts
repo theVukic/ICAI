@@ -1,6 +1,6 @@
 import { navigateWithFade } from "./transition";
 import { renderPublishSessionBadge } from "./publish-session";
-import { loadSessionInfo, renderSessionBadge } from "./session";
+import { renderSessionBadge } from "./session";
 import { renderAppBrand } from "./branding";
 
 const backIcon = `
@@ -195,6 +195,11 @@ function resetCategoryState(towKod: string): void {
   state.invalidFields = [];
 }
 
+export function setCategoryPageSession(sessionUsername: string, tokenConfigured: boolean): void {
+  state.sessionUsername = sessionUsername;
+  state.tokenConfigured = tokenConfigured;
+}
+
 export async function prefetchCategoryPage(towKod: string): Promise<void> {
   if (!towKod) {
     return;
@@ -225,9 +230,6 @@ async function loadCategoryPage(root: HTMLDivElement, towKod: string): Promise<v
   }
 
   try {
-    const session = await loadSessionInfo();
-    state.sessionUsername = session.username || "";
-
     const pageData = await getCategoryPageData(towKod);
     state.item = pageData.item;
     state.tokenConfigured = pageData.tokenConfigured;

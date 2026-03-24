@@ -153,6 +153,27 @@ type SessionInfoResponse struct {
 	Username        string `json:"username"`
 	FullName        string `json:"fullName"`
 	ProfileName     string `json:"profileName,omitempty"`
+	Authenticated   bool   `json:"authenticated"`
+	AppUsername     string `json:"appUsername,omitempty"`
+	AppRole         string `json:"appRole,omitempty"`
+	AvailableTokens []string `json:"availableTokens,omitempty"`
+}
+
+type TokenSwitchRequest struct {
+	Name string `json:"name"`
+}
+
+type LoginRequest struct {
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	RememberMe bool   `json:"remember_me"`
+}
+
+type LoginResponse struct {
+	Authenticated bool   `json:"authenticated"`
+	Username      string `json:"username,omitempty"`
+	Role          string `json:"role,omitempty"`
+	Message       string `json:"message,omitempty"`
 }
 
 type ListingLimitSegment struct {

@@ -2,7 +2,7 @@ import Quill from "quill";
 import "quill/dist/quill.snow.css";
 import { navigateWithFade } from "./transition";
 import { renderPublishSessionBadge } from "./publish-session";
-import { loadSessionInfo, renderSessionBadge } from "./session";
+import { renderSessionBadge } from "./session";
 import { renderAppBrand } from "./branding";
 
 const backIcon = `
@@ -39,6 +39,7 @@ const state: {
   message: string;
   tone: "muted" | "danger" | "success";
   profileName: string;
+  loadedProfileName: string;
   editorHtml: string;
   quill: Quill | null;
   sessionUsername: string;
@@ -49,6 +50,7 @@ const state: {
   message: "",
   tone: "muted",
   profileName: "",
+  loadedProfileName: "",
   editorHtml: "",
   quill: null,
   sessionUsername: "",
@@ -56,11 +58,31 @@ const state: {
 };
 
 export function mountDescriptionPage(root: HTMLDivElement): void {
-  if (!state.isLoading && state.profileName === "") {
+  if (!state.isLoading && state.loadedProfileName !== state.profileName) {
     void loadDescription(root);
   }
 
   renderDescriptionPage(root);
+}
+
+export function setDescriptionPageSession(
+  sessionUsername: string,
+  tokenConfigured: boolean,
+  profileName: string,
+): void {
+  state.sessionUsername = sessionUsername;
+  state.tokenConfigured = tokenConfigured;
+
+  const normalizedProfileName = profileName.trim() || "default";
+  if (state.profileName === normalizedProfileName) {
+    return;
+  }
+
+  state.profileName = normalizedProfileName;
+  state.loadedProfileName = "";
+  state.editorHtml = "";
+  state.message = "";
+  state.quill = null;
 }
 
 async function loadDescription(root: HTMLDivElement): Promise<void> {
@@ -69,10 +91,6 @@ async function loadDescription(root: HTMLDivElement): Promise<void> {
   renderDescriptionPage(root);
 
   try {
-    const session = await loadSessionInfo();
-    state.sessionUsername = session.username || "";
-    state.tokenConfigured = session.tokenConfigured;
-
     const response = await fetch("/api/description");
     const data = (await response.json()) as DescriptionResponse | ErrorResponse;
     if (!response.ok) {
@@ -81,6 +99,7 @@ async function loadDescription(root: HTMLDivElement): Promise<void> {
 
     const document = data as DescriptionResponse;
     state.profileName = document.profileName || "";
+    state.loadedProfileName = state.profileName;
     state.editorHtml = document.content || "";
     state.tone = "muted";
   } catch (error) {

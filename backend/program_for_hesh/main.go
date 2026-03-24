@@ -50,6 +50,7 @@ type Config struct {
 
 type PepperConfig struct {
 	ConfigVersion int            `json:"config_version"`
+	PepperRaw     string         `json:"pepper_raw"`
 	PepperHash    string         `json:"pepper_hash"`
 	SaltPepper    string         `json:"salt_pepper"`
 	CreatedAt     string         `json:"created_at"`
@@ -69,6 +70,7 @@ type User struct {
 }
 
 type LegacyPepper struct {
+	PepperRaw  string `json:"pepper_raw,omitempty"`
 	PepperHash string `json:"pepper_hash"`
 	SaltPepper string `json:"salt_pepper"`
 	CreatedAt  string `json:"created_at"`
@@ -1224,6 +1226,7 @@ func changePepperFlow(scanner *bufio.Scanner, pepperFile string) (string, bool, 
 	}
 
 	config.LegacyPeppers = append(config.LegacyPeppers, LegacyPepper{
+		PepperRaw:  config.PepperRaw,
 		PepperHash: config.PepperHash,
 		SaltPepper: config.SaltPepper,
 		CreatedAt:  config.CreatedAt,
@@ -1235,6 +1238,7 @@ func changePepperFlow(scanner *bufio.Scanner, pepperFile string) (string, bool, 
 	}
 
 	config.PepperHash = hashWithArgon2(newPepper, "", newSalt)
+	config.PepperRaw = newPepper
 	config.SaltPepper = base64.StdEncoding.EncodeToString(newSalt)
 	config.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 
@@ -1265,6 +1269,9 @@ func promptCurrentPepper(scanner *bufio.Scanner, pepperFile string) (string, err
 	}
 	if !matchesActivePepper(*config, value) {
 		return "", fmt.Errorf("uneseni pepper nije trenutni aktivni pepper")
+	}
+	if strings.TrimSpace(config.PepperRaw) != "" {
+		return config.PepperRaw, nil
 	}
 	return value, nil
 }
@@ -1326,6 +1333,7 @@ func makePepperFlow(scanner *bufio.Scanner, pepperFile string) (string, bool, er
 
 	config := PepperConfig{
 		ConfigVersion: 1,
+		PepperRaw:     newPepper,
 		PepperHash:    hashWithArgon2(newPepper, "", saltPepper),
 		SaltPepper:    base64.StdEncoding.EncodeToString(saltPepper),
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
@@ -1357,6 +1365,9 @@ func promptPepperForUser(scanner *bufio.Scanner, pepperFile string) (string, err
 
 func matchesLegacyPepper(config PepperConfig, pepper string) bool {
 	for _, item := range config.LegacyPeppers {
+		if strings.TrimSpace(item.PepperRaw) != "" && item.PepperRaw == pepper {
+			return true
+		}
 		saltPepper, err := base64.StdEncoding.DecodeString(item.SaltPepper)
 		if err != nil {
 			continue
@@ -1370,6 +1381,9 @@ func matchesLegacyPepper(config PepperConfig, pepper string) bool {
 }
 
 func matchesActivePepper(config PepperConfig, pepper string) bool {
+	if strings.TrimSpace(config.PepperRaw) != "" {
+		return config.PepperRaw == pepper
+	}
 	saltPepper, err := base64.StdEncoding.DecodeString(config.SaltPepper)
 	if err != nil {
 		return false

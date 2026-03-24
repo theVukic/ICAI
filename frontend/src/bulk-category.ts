@@ -1,6 +1,6 @@
 import { navigateWithFade } from "./transition";
 import { renderPublishSessionBadge } from "./publish-session";
-import { loadSessionInfo, renderSessionBadge } from "./session";
+import { renderSessionBadge } from "./session";
 import { renderAppBrand } from "./branding";
 
 const SELECTED_TOWKODS_STORAGE_KEY = "icaiapp:selected-towkods";
@@ -159,16 +159,17 @@ export function mountBulkCategoryPage(root: HTMLDivElement): void {
   renderBulkCategoryPage(root);
 }
 
+export function setBulkCategoryPageSession(sessionUsername: string, tokenConfigured: boolean): void {
+  state.sessionUsername = sessionUsername;
+  state.tokenConfigured = tokenConfigured;
+}
+
 async function loadBulkCategoryItems(root: HTMLDivElement): Promise<void> {
   state.isLoading = true;
   state.message = "";
   renderBulkCategoryPage(root);
 
   try {
-    const session = await loadSessionInfo();
-    state.sessionUsername = session.username || "";
-    state.tokenConfigured = session.tokenConfigured;
-
     const selectedTowKods = loadStoredSelectedTowKods();
     const response = await fetch("/api/catalog");
     const data = (await response.json()) as CatalogStateResponse | ErrorResponse;

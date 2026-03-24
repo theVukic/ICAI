@@ -21,6 +21,7 @@ type App struct {
 	distDir        string
 	descriptionDir string
 	olxCategories  *OLXCategoryService
+	auth           *AuthManager
 }
 
 func NewApp() (*App, error) {
@@ -54,6 +55,14 @@ func NewApp() (*App, error) {
 			filepath.Join(projectDir, "backend"),
 			workDir,
 			filepath.Join(workDir, "backend"),
+		}),
+		auth: NewAuthManager([]string{
+			filepath.Join(exeDir, "backend"),
+			exeDir,
+			filepath.Join(projectDir, "backend"),
+			projectDir,
+			filepath.Join(workDir, "backend"),
+			workDir,
 		}),
 	}
 
@@ -106,7 +115,10 @@ func (a *App) Run() error {
 
 func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/test", a.handleHealth)
-	mux.HandleFunc("/api/catalog", func(w http.ResponseWriter, r *http.Request) {
+
+	protectedAPI := http.NewServeMux()
+
+	protectedAPI.HandleFunc("/api/catalog", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			a.handleCatalogState(w, r)
@@ -117,7 +129,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 		}
 	})
 
-	mux.HandleFunc("/api/catalog/upload", func(w http.ResponseWriter, r *http.Request) {
+	protectedAPI.HandleFunc("/api/catalog/upload", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -125,17 +137,21 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 		a.handleCatalogUpload(w, r)
 	})
 
-	mux.HandleFunc("/api/catalog/bulk-delete", a.handleCatalogBulkDelete)
-	mux.HandleFunc("/api/catalog/bulk-edit", a.handleCatalogBulkEdit)
-	mux.HandleFunc("/api/catalog/publish", a.handleCatalogPublish)
-	mux.HandleFunc("/api/catalog/item/", a.handleCatalogItem)
-	mux.HandleFunc("/api/description/render/", a.handleDescriptionRender)
-	mux.HandleFunc("/api/description", a.handleDescription)
-	mux.HandleFunc("/api/category/bulk", a.handleCategoryBulk)
-	mux.HandleFunc("/api/category/item/", a.handleCategoryItem)
-	mux.HandleFunc("/api/olx/", a.handleOLXCategories)
+	protectedAPI.HandleFunc("/api/catalog/bulk-delete", a.handleCatalogBulkDelete)
+	protectedAPI.HandleFunc("/api/catalog/bulk-edit", a.handleCatalogBulkEdit)
+	protectedAPI.HandleFunc("/api/catalog/publish", a.handleCatalogPublish)
+	protectedAPI.HandleFunc("/api/catalog/item/", a.handleCatalogItem)
+	protectedAPI.HandleFunc("/api/description/render/", a.handleDescriptionRender)
+	protectedAPI.HandleFunc("/api/description", a.handleDescription)
+	protectedAPI.HandleFunc("/api/category/bulk", a.handleCategoryBulk)
+	protectedAPI.HandleFunc("/api/category/item/", a.handleCategoryItem)
+	protectedAPI.HandleFunc("/api/olx/", a.handleOLXCategories)
+	protectedAPI.HandleFunc("/api/listing-limits", a.handleListingLimits)
+
+	mux.HandleFunc("/api/login", a.handleLogin)
+	mux.HandleFunc("/api/logout", a.handleLogout)
 	mux.HandleFunc("/api/session", a.handleSessionInfo)
-	mux.HandleFunc("/api/listing-limits", a.handleListingLimits)
+	mux.Handle("/api/", a.requireAuthentication(protectedAPI))
 
 	fileServer := http.FileServer(http.Dir(a.distDir))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

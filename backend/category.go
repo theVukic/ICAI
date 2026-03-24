@@ -21,6 +21,8 @@ type OLXCategoryService struct {
 	httpClient *http.Client
 	token      string
 	tokenName  string
+	tokenPath  string
+	tokens     []namedTokenFile
 	me         SessionInfoResponse
 }
 
@@ -48,11 +50,13 @@ type olxMeResponse struct {
 }
 
 func NewOLXCategoryService(searchRoots []string) *OLXCategoryService {
-	tokenName, token := loadOLXTokenConfig(searchRoots)
+	tokenPath, tokenName, token, tokens := loadOLXTokenConfig(searchRoots)
 	return &OLXCategoryService{
 		httpClient: &http.Client{Timeout: 12 * time.Second},
 		token:      token,
 		tokenName:  tokenName,
+		tokenPath:  tokenPath,
+		tokens:     tokens,
 	}
 }
 
@@ -62,7 +66,10 @@ func (s *OLXCategoryService) HasToken() bool {
 
 func (s *OLXCategoryService) SessionInfo() SessionInfoResponse {
 	if !s.HasToken() {
-		return SessionInfoResponse{TokenConfigured: false}
+		return SessionInfoResponse{
+			TokenConfigured: false,
+			AvailableTokens: s.AvailableProfiles(),
+		}
 	}
 
 	response := s.me
@@ -73,7 +80,91 @@ func (s *OLXCategoryService) SessionInfo() SessionInfoResponse {
 	if strings.TrimSpace(response.ProfileName) == "" {
 		response.ProfileName = s.ActiveProfileName()
 	}
+	response.AvailableTokens = s.AvailableProfiles()
 	return response
+}
+
+func (s *OLXCategoryService) AvailableProfiles() []string {
+	if len(s.tokens) == 0 {
+		if strings.TrimSpace(s.tokenName) == "" {
+			return []string{}
+		}
+		return []string{strings.TrimSpace(s.tokenName)}
+	}
+
+	seen := make(map[string]struct{}, len(s.tokens))
+	profiles := make([]string, 0, len(s.tokens))
+	for _, entry := range s.tokens {
+		name := strings.TrimSpace(entry.Name)
+		if name == "" {
+			name = "default"
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		profiles = append(profiles, name)
+	}
+
+	return profiles
+}
+
+func (s *OLXCategoryService) SwitchActiveProfile(ctx context.Context, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("naziv tokena je obavezan")
+	}
+	if strings.TrimSpace(s.tokenPath) == "" {
+		return fmt.Errorf("backend/token.json nije pronadjen")
+	}
+
+	content, err := os.ReadFile(s.tokenPath)
+	if err != nil {
+		return fmt.Errorf("ne mogu procitati token.json: %w", err)
+	}
+
+	var payload tokenFilePayload
+	if err := json.Unmarshal(content, &payload); err != nil {
+		return fmt.Errorf("token.json nije validan")
+	}
+
+	if len(payload.Tokens) == 0 {
+		return fmt.Errorf("token.json ne sadrzi vise tokena za izbor")
+	}
+
+	var selected *namedTokenFile
+	for i := range payload.Tokens {
+		if strings.EqualFold(strings.TrimSpace(payload.Tokens[i].Name), name) {
+			selected = &payload.Tokens[i]
+			break
+		}
+	}
+	if selected == nil || strings.TrimSpace(selected.Token) == "" {
+		return fmt.Errorf("trazeni OLX token nije pronadjen")
+	}
+
+	payload.ActiveName = strings.TrimSpace(selected.Name)
+	updated, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("ne mogu upisati token.json")
+	}
+	updated = append(updated, '\n')
+	if err := os.WriteFile(s.tokenPath, updated, 0o600); err != nil {
+		return fmt.Errorf("ne mogu sacuvati token.json: %w", err)
+	}
+
+	s.tokenName = strings.TrimSpace(selected.Name)
+	s.token = strings.TrimPrefix(strings.TrimSpace(selected.Token), "Bearer ")
+	s.tokens = payload.Tokens
+	s.me = SessionInfoResponse{}
+
+	loadCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	if err := s.LoadMe(loadCtx); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *OLXCategoryService) ActiveProfileName() string {
@@ -237,9 +328,9 @@ func (s *OLXCategoryService) getJSON(ctx context.Context, requestURL string, des
 	return nil
 }
 
-func loadOLXTokenConfig(searchRoots []string) (string, string) {
+func loadOLXTokenConfig(searchRoots []string) (string, string, string, []namedTokenFile) {
 	if envToken := strings.TrimSpace(os.Getenv("OLX_BEARER_TOKEN")); envToken != "" {
-		return strings.TrimSpace(os.Getenv("OLX_TOKEN_NAME")), envToken
+		return "", strings.TrimSpace(os.Getenv("OLX_TOKEN_NAME")), envToken, []namedTokenFile{}
 	}
 
 	for _, root := range searchRoots {
@@ -256,14 +347,14 @@ func loadOLXTokenConfig(searchRoots []string) (string, string) {
 		var payload tokenFilePayload
 		if err := json.Unmarshal(content, &payload); err != nil {
 			var entries []namedTokenFile
-			if arrayErr := json.Unmarshal(content, &entries); arrayErr != nil {
-				continue
+				if arrayErr := json.Unmarshal(content, &entries); arrayErr != nil {
+					continue
+				}
+				payload.Tokens = entries
 			}
-			payload.Tokens = entries
-		}
 
 		if token := strings.TrimSpace(payload.Token); token != "" {
-			return strings.TrimSpace(payload.Name), strings.TrimPrefix(token, "Bearer ")
+			return tokenPath, strings.TrimSpace(payload.Name), strings.TrimPrefix(token, "Bearer "), payload.Tokens
 		}
 
 		if len(payload.Tokens) == 0 {
@@ -278,7 +369,7 @@ func loadOLXTokenConfig(searchRoots []string) (string, string) {
 
 				token := strings.TrimSpace(entry.Token)
 				if token != "" {
-					return strings.TrimSpace(entry.Name), strings.TrimPrefix(token, "Bearer ")
+					return tokenPath, strings.TrimSpace(entry.Name), strings.TrimPrefix(token, "Bearer "), payload.Tokens
 				}
 			}
 		}
@@ -288,11 +379,11 @@ func loadOLXTokenConfig(searchRoots []string) (string, string) {
 			if token == "" {
 				continue
 			}
-			return strings.TrimSpace(entry.Name), strings.TrimPrefix(token, "Bearer ")
+			return tokenPath, strings.TrimSpace(entry.Name), strings.TrimPrefix(token, "Bearer "), payload.Tokens
 		}
 	}
 
-	return "", ""
+	return "", "", "", []namedTokenFile{}
 }
 
 func firstNonEmpty(values ...string) string {
@@ -388,6 +479,11 @@ func (a *App) handleCategoryBulk(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleOLXCategories(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(strings.TrimPrefix(r.URL.Path, "/api/olx"), "/token") {
+		a.handleOLXTokenSelection(w, r)
+		return
+	}
+
 	if a.olxCategories == nil || !a.olxCategories.HasToken() {
 		writeError(w, http.StatusBadRequest, "OLX token nije podešen. Zalijepi ga u backend/token.json")
 		return
@@ -424,12 +520,57 @@ func (a *App) handleSessionInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var response SessionInfoResponse
+
 	if a.olxCategories == nil {
-		writeJSON(w, http.StatusOK, SessionInfoResponse{})
+		response = SessionInfoResponse{}
+	} else {
+		response = a.olxCategories.SessionInfo()
+	}
+
+	if a.auth != nil {
+		if session, ok := a.auth.SessionFromRequest(r); ok {
+			response.Authenticated = true
+			response.AppUsername = session.Username
+			response.AppRole = session.Role
+		}
+	}
+
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (a *App) handleOLXTokenSelection(w http.ResponseWriter, r *http.Request) {
+	if a.olxCategories == nil {
+		writeError(w, http.StatusBadRequest, "OLX token servis nije dostupan")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, a.olxCategories.SessionInfo())
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req TokenSwitchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "neispravan JSON body")
+		return
+	}
+
+	if err := a.olxCategories.SwitchActiveProfile(r.Context(), req.Name); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	response := a.olxCategories.SessionInfo()
+	if a.auth != nil {
+		if session, ok := a.auth.SessionFromRequest(r); ok {
+			response.Authenticated = true
+			response.AppUsername = session.Username
+			response.AppRole = session.Role
+		}
+	}
+
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (a *App) handleOLXCategoryDetails(w http.ResponseWriter, r *http.Request, tail string) {

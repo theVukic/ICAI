@@ -1,6 +1,7 @@
 {
   "config_version": 1,
-  "pepper_hash": "xoUYtnIS6zjM78qO04rCVDw6v5bnbplEaFKHHDYTXgg=",
-  "salt_pepper": "ponGolHoMFNpkprvUJAxNg==",
-  "created_at": "2026-03-24T19:37:48Z"
+  "pepper_raw": "ICAI_APP",
+  "pepper_hash": "gsgj5p0J72Y2T5aeyJbu40Fjd3hgs/34dH7LFgjHK7w=",
+  "salt_pepper": "GeaeIJ+mhxSWA+Lo1Ok6aQ==",
+  "created_at": "2026-03-24T20:45:20Z"
 }

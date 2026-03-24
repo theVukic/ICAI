@@ -1,6 +1,6 @@
 import { navigateWithFade } from "./transition";
 import { renderPublishSessionBadge } from "./publish-session";
-import { loadSessionInfo, renderSessionBadge } from "./session";
+import { renderSessionBadge } from "./session";
 import { renderAppBrand } from "./branding";
 
 const backIcon = `
@@ -71,6 +71,10 @@ const state: {
 };
 
 export function mountEditPage(root: HTMLDivElement, towKod: string): void {
+  if (!state.sessionUsername) {
+    state.sessionUsername = "";
+  }
+
   if (state.activeTowKod !== towKod || (!state.item && !state.isLoading)) {
     state.activeTowKod = towKod;
     state.activeImageIndex = 0;
@@ -80,6 +84,11 @@ export function mountEditPage(root: HTMLDivElement, towKod: string): void {
   renderEditPage(root, towKod);
 }
 
+export function setEditPageSession(sessionUsername: string, tokenConfigured: boolean): void {
+  state.sessionUsername = sessionUsername;
+  state.tokenConfigured = tokenConfigured;
+}
+
 async function loadEditItem(root: HTMLDivElement, towKod: string): Promise<void> {
   state.isLoading = true;
   state.item = null;
@@ -87,10 +96,6 @@ async function loadEditItem(root: HTMLDivElement, towKod: string): Promise<void>
   renderEditPage(root, towKod);
 
   try {
-    const session = await loadSessionInfo();
-    state.sessionUsername = session.username || "";
-    state.tokenConfigured = session.tokenConfigured;
-
     const response = await fetch(`/api/catalog/item/${encodeURIComponent(towKod)}`);
     const data = (await response.json()) as CatalogItem | ErrorResponse;
 

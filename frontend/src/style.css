@@ -364,6 +364,94 @@ button {
     color: var(--text);
 }
 
+.app-session-stack {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.app-session-badge {
+    background: rgba(50, 145, 255, 0.12);
+    border-color: rgba(127, 188, 255, 0.28);
+}
+
+.app-session-badge em {
+    color: #a9d3ff;
+    font-style: normal;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.olx-token-picker {
+    position: relative;
+}
+
+.olx-header-badge {
+    color: var(--text);
+}
+
+.olx-token-trigger {
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.olx-token-trigger svg {
+    width: 16px;
+    height: 16px;
+    color: var(--muted);
+    transition: transform 180ms ease;
+}
+
+.olx-token-trigger.is-open svg {
+    transform: rotate(180deg);
+}
+
+.olx-token-trigger svg path {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8px;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.olx-token-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    min-width: 180px;
+    display: grid;
+    gap: 6px;
+    padding: 8px;
+    border-radius: 16px;
+    background: rgba(20, 24, 28, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.34);
+    z-index: 90;
+}
+
+.olx-token-option {
+    padding: 11px 12px;
+    border-radius: 12px;
+    background: transparent;
+    border: 0;
+    color: var(--text);
+    text-align: left;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.olx-token-option:hover {
+    background: rgba(127, 188, 255, 0.12);
+    transform: none;
+    box-shadow: none;
+}
+
+.olx-token-option.is-active {
+    background: rgba(127, 188, 255, 0.16);
+    color: #a9d3ff;
+}
+
 .publish-session-badge {
     display: inline-flex;
     align-items: center;
@@ -825,6 +913,23 @@ button {
 
 .description-button {
     color: #f3f6fb;
+}
+
+.logout-button .button-icon svg {
+    width: 36px;
+    height: 36px;
+}
+
+.logout-button {
+    color: #ff8f8f;
+}
+
+.logout-button .button-icon path {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8px;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 .description-button-icon {
@@ -2353,6 +2458,153 @@ button {
     }
 }
 
+.login-screen {
+    min-height: 100vh;
+    position: relative;
+    display: grid;
+    place-items: center;
+    padding: 32px 20px;
+    overflow: hidden;
+    background: #14181c;
+}
+
+.login-screen-loading {
+    background: #14181c;
+}
+
+.login-glow {
+    display: none;
+}
+
+.login-glow-left {
+    display: none;
+}
+
+.login-glow-right {
+    display: none;
+}
+
+.login-card {
+    position: relative;
+    z-index: 1;
+    width: min(480px, 100%);
+    display: grid;
+    gap: 24px;
+    padding: 34px;
+    border-radius: 30px;
+    background: rgba(23, 27, 32, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 28px 70px rgba(0, 0, 0, 0.38);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+}
+
+.login-card-loading {
+    text-align: center;
+}
+
+.login-brand .logo-wrap {
+    gap: 16px;
+}
+
+.login-copy {
+    display: flex;
+    align-items: center;
+}
+
+.login-eyebrow {
+    color: #7fbcff;
+    font-size: 0.76rem;
+    font-weight: 900;
+    letter-spacing: 0.18em;
+}
+
+.login-form {
+    display: grid;
+    gap: 16px;
+}
+
+.login-field {
+    display: grid;
+    gap: 8px;
+}
+
+.login-field span {
+    color: #d7dfeb;
+    font-size: 0.86rem;
+    font-weight: 700;
+}
+
+.login-field input {
+    width: 100%;
+    padding: 15px 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(13, 17, 21, 0.82);
+    color: var(--text);
+    outline: none;
+    transition: border-color 180ms ease, box-shadow 180ms ease, opacity 180ms ease;
+}
+
+.login-field input::placeholder {
+    font-style: italic;
+}
+
+.login-field input:focus {
+    border-color: rgba(127, 188, 255, 0.7);
+    box-shadow: 0 0 0 4px rgba(50, 145, 255, 0.16);
+}
+
+.login-field input.login-input-error,
+.login-field input.login-input-error:focus {
+    border-color: rgba(255, 107, 107, 0.72);
+    box-shadow: 0 0 0 4px rgba(255, 107, 107, 0.14);
+}
+
+.login-remember {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--muted);
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.login-remember input {
+    width: 18px;
+    height: 18px;
+    accent-color: #3291ff;
+}
+
+.login-submit {
+    min-height: 54px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #3291ff, #1976f3);
+    color: #eef6ff;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    transition:
+        transform 180ms ease,
+        background-color 180ms ease,
+        border-color 180ms ease,
+        opacity 180ms ease,
+        filter 180ms ease,
+        box-shadow 180ms ease;
+}
+
+.login-submit:hover {
+    transform: scale(1.06);
+    opacity: 0.9;
+    filter: brightness(1.08);
+    box-shadow: none;
+}
+
+.login-submit:disabled,
+.login-field input:disabled {
+    opacity: 0.72;
+    cursor: default;
+}
+
 
 @media (max-width: 720px) {
     .shell {
@@ -2384,7 +2636,11 @@ button {
         font-size: 0.95rem;
     }
 
-  .main-layout {
+    .app-session-stack {
+        justify-content: center;
+    }
+
+    .main-layout {
     width: 100%;
     padding: 20px 0;
   }
@@ -2427,6 +2683,15 @@ button {
 
     .edit-page {
         padding: 20px 12px 16px;
+    }
+
+    .login-screen {
+        padding: 20px 14px;
+    }
+
+    .login-card {
+        padding: 24px 20px;
+        border-radius: 24px;
     }
 
     .bulk-edit-page {

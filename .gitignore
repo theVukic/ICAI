@@ -1,3 +1,6 @@
 app/
 *.pfx
 backend/token.json
+backend/session.json
+app/session.json
+app/backend/auth_sessions.json

@@ -2,6 +2,11 @@ type SessionInfo = {
   tokenConfigured: boolean;
   username: string;
   fullName: string;
+  authenticated?: boolean;
+  appUsername?: string;
+  appRole?: string;
+  profileName?: string;
+  availableTokens?: string[];
 };
 
 export type ListingLimits = {
@@ -34,6 +39,9 @@ export async function loadSessionInfo(): Promise<SessionInfo> {
 
   sessionPromise = fetch("/api/session")
     .then(async (response) => {
+      if (!response.ok) {
+        throw new Error("Provjera session-a nije uspjela.");
+      }
       const data = (await response.json()) as SessionInfo;
       cachedSession = data;
       return data;
@@ -43,6 +51,76 @@ export async function loadSessionInfo(): Promise<SessionInfo> {
     });
 
   return sessionPromise;
+}
+
+export function resetSessionInfoCache(): void {
+  cachedSession = null;
+  sessionPromise = null;
+}
+
+export async function loginApp(
+  username: string,
+  password: string,
+  rememberMe: boolean,
+): Promise<void> {
+  const response = await fetch("/api/login", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      username,
+      password,
+      remember_me: rememberMe,
+    }),
+  });
+
+  const data = (await response.json()) as { error?: string; message?: string };
+  if (!response.ok) {
+    throw new Error(data.message || data.error || "Login nije uspio.");
+  }
+
+  resetSessionInfoCache();
+}
+
+export async function logoutApp(): Promise<void> {
+  await fetch("/api/logout", {
+    method: "POST",
+  });
+
+  resetSessionInfoCache();
+}
+
+export async function switchOlxToken(name: string): Promise<SessionInfo> {
+  const response = await fetch("/api/olx/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ name }),
+  });
+
+  const data = (await response.json()) as SessionInfo | { error?: string };
+  if (!response.ok) {
+    throw new Error("error" in data && data.error ? data.error : "Promjena OLX tokena nije uspjela.");
+  }
+
+  const nextSession = data as SessionInfo;
+  cachedSession = {
+    ...(cachedSession || {}),
+    ...nextSession,
+    authenticated:
+      nextSession.authenticated ??
+      cachedSession?.authenticated,
+    appUsername:
+      nextSession.appUsername ??
+      cachedSession?.appUsername,
+    appRole:
+      nextSession.appRole ??
+      cachedSession?.appRole,
+  };
+  sessionPromise = null;
+  return cachedSession;
 }
 
 export async function fetchListingLimits(): Promise<ListingLimits> {
