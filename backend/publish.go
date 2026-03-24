@@ -328,12 +328,7 @@ func extractImageURLs(images []CatalogImage) []string {
 }
 
 func buildListingTitle(item CatalogItem) string {
-	parts := compactUniqueStrings(
-		item.NameB2B,
-		item.BrandName,
-		item.Index,
-	)
-	title := strings.Join(parts, " | ")
+	title := strings.TrimSpace(item.NameB2B)
 	if strings.TrimSpace(title) == "" {
 		title = firstNonEmpty(item.TowKod, "Artikal")
 	}
@@ -346,13 +341,10 @@ func buildListingTitle(item CatalogItem) string {
 }
 
 func buildShortDescription(item CatalogItem) string {
-	parts := compactUniqueStrings(
-		item.NameB2B,
-		item.BrandName,
-		item.Index,
-		item.TowKod,
-	)
-	shortDescription := strings.Join(parts, " | ")
+	shortDescription := strings.TrimSpace(item.NameB2B)
+	if shortDescription == "" {
+		shortDescription = firstNonEmpty(strings.TrimSpace(item.TowKod), "Artikal")
+	}
 	if len(shortDescription) > 180 {
 		return strings.TrimSpace(shortDescription[:180])
 	}
@@ -360,50 +352,11 @@ func buildShortDescription(item CatalogItem) string {
 }
 
 func buildListingDescription(item CatalogItem, renderedDescription string) string {
-	lines := []string{
-		buildDescriptionLine("Naziv", item.NameB2B),
-		buildDescriptionLine("Brend", item.BrandName),
-		buildDescriptionLine("Sifra", item.Index),
-		buildDescriptionLine("TowKod", item.TowKod),
-	}
-
-	if item.Categorization != nil && item.Categorization.Category != nil {
-		lines = append(lines, buildDescriptionLine("Kategorija", item.Categorization.Category.Name))
-	}
-
-	if item.RetailPrice > 0 {
-		lines = append(lines, buildDescriptionLine("Cijena", fmt.Sprintf("%s %s", formatTemplateNumber(item.RetailPrice), formatTemplateCurrency(item.CurrencyCode))))
-	}
-
-	if strings.TrimSpace(item.TechnicalDescription) != "" {
-		lines = append(lines, "", "Tehnicki opis:", item.TechnicalDescription)
-	}
-
 	if strings.TrimSpace(renderedDescription) != "" {
-		lines = append(lines, "", "OLX opis:", renderedDescription)
+		return strings.TrimSpace(renderedDescription)
 	}
 
-	filtered := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			if len(filtered) == 0 || filtered[len(filtered)-1] == "" {
-				continue
-			}
-			filtered = append(filtered, "")
-			continue
-		}
-		filtered = append(filtered, line)
-	}
-
-	return strings.TrimSpace(strings.Join(filtered, "\n"))
-}
-
-func buildDescriptionLine(label string, value string) string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s: %s", label, trimmed)
+	return strings.TrimSpace(item.TechnicalDescription)
 }
 
 func buildPublishSummaryMessage(published int, skipped int, failed int, usedSelection bool) string {
