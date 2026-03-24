@@ -155,6 +155,22 @@ type SessionInfoResponse struct {
 	ProfileName     string `json:"profileName,omitempty"`
 }
 
+type ListingLimitSegment struct {
+	Segment   string `json:"segment"`
+	Limit     int    `json:"limit"`
+	Listings  int    `json:"listings"`
+	Remaining int    `json:"remaining"`
+}
+
+type ListingLimitsResponse struct {
+	TokenConfigured bool                  `json:"tokenConfigured"`
+	Remaining       int                   `json:"remaining"`
+	TotalLimit      int                   `json:"totalLimit"`
+	TotalListings   int                   `json:"totalListings"`
+	CheckedAt       string                `json:"checkedAt,omitempty"`
+	Segments        []ListingLimitSegment `json:"segments"`
+}
+
 type DescriptionDocument struct {
 	ProfileName string     `json:"profileName"`
 	Content     string     `json:"content"`
@@ -185,9 +201,9 @@ type PublishedListingResult struct {
 }
 
 type SkippedListingResult struct {
-	TowKod  string `json:"towKod"`
-	Title   string `json:"title"`
-	Reason  string `json:"reason"`
+	TowKod string `json:"towKod"`
+	Title  string `json:"title"`
+	Reason string `json:"reason"`
 }
 
 type FailedListingResult struct {
@@ -197,9 +213,10 @@ type FailedListingResult struct {
 }
 
 type CatalogPublishResponse struct {
-	Message   string                  `json:"message"`
-	Published []PublishedListingResult `json:"published"`
-	Skipped   []SkippedListingResult   `json:"skipped"`
-	Failed    []FailedListingResult    `json:"failed"`
-	State     CatalogState             `json:"state"`
+	Message       string                   `json:"message"`
+	Published     []PublishedListingResult `json:"published"`
+	Skipped       []SkippedListingResult   `json:"skipped"`
+	Failed        []FailedListingResult    `json:"failed"`
+	State         CatalogState             `json:"state"`
+	ListingLimits *ListingLimitsResponse   `json:"listingLimits,omitempty"`
 }

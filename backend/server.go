@@ -135,6 +135,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/category/item/", a.handleCategoryItem)
 	mux.HandleFunc("/api/olx/", a.handleOLXCategories)
 	mux.HandleFunc("/api/session", a.handleSessionInfo)
+	mux.HandleFunc("/api/listing-limits", a.handleListingLimits)
 
 	fileServer := http.FileServer(http.Dir(a.distDir))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

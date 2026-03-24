@@ -199,6 +199,41 @@ button {
     text-align: center;
 }
 
+.footer-publish-metrics {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 8px;
+    min-width: 44px;
+    margin-left: 10px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+
+.footer-publish-limit {
+    color: var(--text);
+    font-size: 1.45rem;
+    font-weight: 900;
+    letter-spacing: 0.01em;
+}
+
+.footer-publish-limit.is-loading {
+    color: var(--muted);
+}
+
+.footer-publish-success,
+.footer-publish-failed {
+    font-size: 0.92rem;
+    font-weight: 800;
+}
+
+.footer-publish-success {
+    color: #39c26b;
+}
+
+.footer-publish-failed {
+    color: #ff5f5f;
+}
+
 .footer-counts {
     display: inline-flex;
     align-items: baseline;
@@ -2246,6 +2281,15 @@ button {
         position: static;
         transform: none;
         margin-left: auto;
+    }
+
+    .footer-publish-metrics {
+        margin-left: 8px;
+        gap: 6px;
+    }
+
+    .footer-publish-limit {
+        font-size: 1.2rem;
     }
 
     .description-button-icon svg {

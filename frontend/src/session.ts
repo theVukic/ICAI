@@ -4,6 +4,20 @@ type SessionInfo = {
   fullName: string;
 };
 
+export type ListingLimits = {
+  tokenConfigured: boolean;
+  remaining: number;
+  totalLimit: number;
+  totalListings: number;
+  checkedAt?: string;
+  segments: Array<{
+    segment: string;
+    limit: number;
+    listings: number;
+    remaining: number;
+  }>;
+};
+
 let cachedSession: SessionInfo | null = null;
 let sessionPromise: Promise<SessionInfo> | null = null;
 
@@ -27,6 +41,16 @@ export async function loadSessionInfo(): Promise<SessionInfo> {
     });
 
   return sessionPromise;
+}
+
+export async function fetchListingLimits(): Promise<ListingLimits> {
+  const response = await fetch("/api/listing-limits");
+  const data = (await response.json()) as ListingLimits | { error?: string };
+  if (!response.ok) {
+    throw new Error("error" in data && data.error ? data.error : "Ucitavanje limita nije uspelo.");
+  }
+
+  return data as ListingLimits;
 }
 
 export function renderSessionBadge(session: SessionInfo | null): string {

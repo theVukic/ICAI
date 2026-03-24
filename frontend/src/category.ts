@@ -193,28 +193,26 @@ function resetCategoryState(towKod: string): void {
   state.invalidFields = [];
 }
 
-export function prefetchCategoryPage(towKod: string): void {
+export async function prefetchCategoryPage(towKod: string): Promise<void> {
   if (!towKod) {
     return;
   }
 
-  void (async () => {
-    try {
-      const pageData = await getCategoryPageData(towKod);
-      const category = pageData.categorization?.category;
-      if (!category) {
-        return;
-      }
-
-      await getCategorySelectionData(category.id);
-
-      if (category.has_models && pageData.categorization?.brand?.id) {
-        await getCategoryModels(category.id, pageData.categorization.brand.id);
-      }
-    } catch {
-      // Ignore prefetch failures and let the normal page load surface any real error.
+  try {
+    const pageData = await getCategoryPageData(towKod);
+    const category = pageData.categorization?.category;
+    if (!category) {
+      return;
     }
-  })();
+
+    await getCategorySelectionData(category.id);
+
+    if (category.has_models && pageData.categorization?.brand?.id) {
+      await getCategoryModels(category.id, pageData.categorization.brand.id);
+    }
+  } catch {
+    // Ignore prefetch failures and let the normal page load surface any real error.
+  }
 }
 
 async function loadCategoryPage(root: HTMLDivElement, towKod: string): Promise<void> {

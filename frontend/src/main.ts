@@ -4,7 +4,7 @@ import { mountCategoryPage, prefetchCategoryPage } from "./category";
 import { mountBulkEditPage } from "./bulk-edit";
 import { mountDescriptionPage } from "./description";
 import { mountEditPage } from "./edit";
-import { loadSessionInfo, renderSessionBadge } from "./session";
+import { fetchListingLimits, loadSessionInfo, renderSessionBadge, type ListingLimits } from "./session";
 import { mountPageTransition, navigateWithFade } from "./transition";
 
 type CatalogImage = {
@@ -80,6 +80,7 @@ type PublishResponse = {
     error: string;
   }>;
   state: CatalogState;
+  listingLimits?: ListingLimits;
 };
 
 const VIEW_MODE_STORAGE_KEY = "icaiapp:view-mode";
@@ -128,6 +129,10 @@ const state: {
   animateItemsIn: boolean;
   sessionUsername: string;
   tokenConfigured: boolean;
+  listingLimitRemaining: number | null;
+  listingLimitLoading: boolean;
+  publishSessionSuccessCount: number;
+  publishSessionFailedCount: number;
 } = {
   data: {
     catalogs: [],
@@ -157,6 +162,10 @@ const state: {
   animateItemsIn: false,
   sessionUsername: "",
   tokenConfigured: false,
+  listingLimitRemaining: null,
+  listingLimitLoading: false,
+  publishSessionSuccessCount: 0,
+  publishSessionFailedCount: 0,
 };
 
 const plusIcon = `
@@ -586,6 +595,23 @@ function render(): void {
             </button>
             <span class="action-label">OBJAVI</span>
           </div>
+          <div class="footer-publish-metrics" aria-live="polite">
+            ${
+              state.tokenConfigured && (state.listingLimitRemaining !== null || state.listingLimitLoading)
+                ? `<span class="footer-publish-limit${state.listingLimitLoading && state.listingLimitRemaining === null ? " is-loading" : ""}">${state.listingLimitRemaining ?? "..."}</span>`
+                : ""
+            }
+            ${
+              state.publishSessionSuccessCount > 0
+                ? `<span class="footer-publish-success">${state.publishSessionSuccessCount}</span>`
+                : ""
+            }
+            ${
+              state.publishSessionFailedCount > 0
+                ? `<span class="footer-publish-failed">${state.publishSessionFailedCount}</span>`
+                : ""
+            }
+          </div>
         </div>
       </footer>
     </div>
@@ -796,6 +822,8 @@ function bindEvents(): void {
     render();
 
     try {
+      await refreshListingLimits();
+
       const requestBody = {
         selectedTowKods: state.selectedTowKods,
       };
@@ -821,6 +849,16 @@ function bindEvents(): void {
 
       const publishData = data as PublishResponse;
       state.data = publishData.state;
+      if (publishData.listingLimits) {
+        applyListingLimits(publishData.listingLimits);
+      } else if (state.listingLimitRemaining !== null) {
+        state.listingLimitRemaining = Math.max(
+          0,
+          state.listingLimitRemaining - publishData.published.length,
+        );
+      }
+      state.publishSessionSuccessCount += publishData.published.length;
+      state.publishSessionFailedCount += publishData.failed.length;
       state.imageIndexes = filterImageIndexesByItems(state.imageIndexes, state.data.items);
       state.selectedTowKods = state.selectedTowKods.filter((towKod) =>
         state.data.items.some((item) => item.towKod === towKod),
@@ -1004,17 +1042,18 @@ function bindEvents(): void {
         return;
       }
 
-      prefetchCategoryPage(code);
+      void prefetchCategoryPage(code);
     };
 
     button.addEventListener("mouseenter", prefetch);
     button.addEventListener("focus", prefetch);
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       const code = button.dataset.categoryCode;
       if (!code) {
         return;
       }
 
+      await prefetchCategoryPage(code);
       navigateWithFade(root, `/category/${encodeURIComponent(code)}`);
     });
   }
@@ -1025,6 +1064,11 @@ async function loadState(): Promise<void> {
     const session = await loadSessionInfo();
     state.sessionUsername = session.username || "";
     state.tokenConfigured = session.tokenConfigured;
+    state.listingLimitLoading = state.tokenConfigured;
+
+    const limitsPromise = state.tokenConfigured
+      ? fetchCurrentListingLimits()
+      : Promise.resolve<ListingLimits | null>(null);
 
     const response = await fetch("/api/catalog");
     const data = (await response.json()) as CatalogResponse;
@@ -1034,6 +1078,7 @@ async function loadState(): Promise<void> {
     }
 
     state.data = data as CatalogState;
+    applyListingLimits(await limitsPromise);
     state.imageIndexes = {};
     reconcileSelectionState();
     scheduleCategoryPrefetch(state.data.items);
@@ -1046,8 +1091,44 @@ async function loadState(): Promise<void> {
       error instanceof Error ? error.message : "Backend nije dostupan.";
     state.messageTone = "danger";
   } finally {
+    state.listingLimitLoading = false;
     render();
   }
+}
+
+async function refreshListingLimits(): Promise<void> {
+  if (!state.tokenConfigured) {
+    applyListingLimits(null);
+    state.listingLimitLoading = false;
+    return;
+  }
+
+  state.listingLimitLoading = true;
+
+  try {
+    const limits = await fetchCurrentListingLimits();
+    applyListingLimits(limits);
+  } finally {
+    state.listingLimitLoading = false;
+  }
+}
+
+async function fetchCurrentListingLimits(): Promise<ListingLimits | null> {
+  try {
+    return await fetchListingLimits();
+  } catch (error) {
+    console.error("[LIMITS] fetch failed", error);
+    return null;
+  }
+}
+
+function applyListingLimits(limits: ListingLimits | null): void {
+  if (!limits || !limits.tokenConfigured) {
+    state.listingLimitRemaining = null;
+    return;
+  }
+
+  state.listingLimitRemaining = Math.max(0, limits.remaining);
 }
 
 function refreshMainPageFromStore(): void {
@@ -1208,26 +1289,9 @@ function scheduleCategoryPrefetch(items: CatalogItem[]): void {
   }
 
   const uniqueTowKods = [...new Set(towKods)];
-  const batchSize = 4;
-  let index = 0;
-
-  const runBatch = () => {
-    const batch = uniqueTowKods.slice(index, index + batchSize);
-    if (batch.length === 0) {
-      return;
-    }
-
-    for (const towKod of batch) {
-      prefetchCategoryPage(towKod);
-    }
-
-    index += batchSize;
-    if (index < uniqueTowKods.length) {
-      window.setTimeout(runBatch, 40);
-    }
-  };
-
-  window.setTimeout(runBatch, 0);
+  for (const towKod of uniqueTowKods) {
+    void prefetchCategoryPage(towKod);
+  }
 }
 
 function getSelectableTowKods(items: CatalogItem[]): string[] {

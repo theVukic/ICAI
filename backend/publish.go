@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"path"
 	"sort"
@@ -193,6 +195,15 @@ func (a *App) publishCatalogItems(ctx context.Context, selectedTowKods []string)
 
 	result.State = a.store.State()
 	result.Message = buildPublishSummaryMessage(len(result.Published), len(result.Skipped), len(result.Failed), useSelection)
+
+	if a.olxCategories != nil && a.olxCategories.HasToken() {
+		limits, limitsErr := a.olxCategories.GetListingLimits(ctx)
+		if limitsErr != nil {
+			log.Printf("[PUBLISH] listing limits refresh failed: %v", limitsErr)
+		} else {
+			result.ListingLimits = &limits
+		}
+	}
 
 	if len(result.Published) == 0 && len(result.Failed) == 0 && len(result.Skipped) == 0 {
 		return CatalogPublishResponse{}, http.StatusBadRequest, fmt.Errorf("nema artikala za objavu")
@@ -585,8 +596,8 @@ func (s *OLXCategoryService) doMultipartImageUpload(ctx context.Context, listing
 			return nil, fmt.Errorf("preuzimanje slike nije uspelo (%d): %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
 		}
 
-		fileName := imageFileNameFromURL(imageURL, index)
-		part, err := writer.CreateFormFile("images[]", fileName)
+		fileName := imageFileNameFromURL(imageURL, resp.Header.Get("Content-Type"), index)
+		part, err := createImageMultipartPart(writer, "images[]", fileName, resp.Header.Get("Content-Type"))
 		if err != nil {
 			resp.Body.Close()
 			_ = writer.Close()
@@ -636,15 +647,60 @@ func (s *OLXCategoryService) doMultipartImageUpload(ctx context.Context, listing
 	return responseBody, nil
 }
 
-func imageFileNameFromURL(rawURL string, index int) string {
+func createImageMultipartPart(writer *multipart.Writer, fieldName string, fileName string, contentType string) (io.Writer, error) {
+	headers := make(textproto.MIMEHeader)
+	headers.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fieldName, escapeMultipartQuotes(fileName)))
+
+	trimmedContentType := strings.TrimSpace(contentType)
+	if trimmedContentType == "" {
+		trimmedContentType = "application/octet-stream"
+	}
+	headers.Set("Content-Type", trimmedContentType)
+
+	return writer.CreatePart(headers)
+}
+
+func imageFileNameFromURL(rawURL string, contentType string, index int) string {
 	parsed, err := url.Parse(rawURL)
 	if err == nil {
 		base := path.Base(parsed.Path)
 		base = strings.TrimSpace(base)
 		if base != "" && base != "." && base != "/" {
+			if path.Ext(base) == "" {
+				if extension := extensionFromContentType(contentType); extension != "" {
+					return base + extension
+				}
+			}
 			return base
 		}
 	}
 
+	if extension := extensionFromContentType(contentType); extension != "" {
+		return fmt.Sprintf("image-%d%s", index, extension)
+	}
+
 	return fmt.Sprintf("image-%d.jpg", index)
+}
+
+func extensionFromContentType(contentType string) string {
+	trimmed := strings.TrimSpace(contentType)
+	if trimmed == "" {
+		return ""
+	}
+
+	mediaType, _, err := mime.ParseMediaType(trimmed)
+	if err != nil {
+		mediaType = trimmed
+	}
+
+	extensions, err := mime.ExtensionsByType(mediaType)
+	if err != nil || len(extensions) == 0 {
+		return ""
+	}
+
+	return extensions[0]
+}
+
+func escapeMultipartQuotes(value string) string {
+	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"").Replace(value)
 }
