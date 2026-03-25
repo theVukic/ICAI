@@ -121,54 +121,59 @@ func (a *App) handleCatalogPublish(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[PUBLISH] request received selectedTowKods=%v", req.SelectedTowKods)
 
-	publishCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	reservedItems, _, err := a.store.ReserveItemsForPublish(req.SelectedItemKeys, req.SelectedTowKods)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	publishCtx, cancel := context.WithTimeout(r.Context(), 60*time.Minute)
 	defer cancel()
 
-	response, status, err := a.publishCatalogItems(publishCtx, req.SelectedTowKods)
-	if err != nil {
-		log.Printf("[PUBLISH] request failed status=%d error=%v", status, err)
-		writeError(w, status, err.Error())
+	queueReq := queuedPublishRequest{
+		ctx:        publishCtx,
+		items:      reservedItems,
+		responseCh: make(chan queuedPublishResult, 1),
+	}
+
+	select {
+	case a.publishQueue <- queueReq:
+		log.Printf("[PUBLISH] request queued towKods=%v", req.SelectedTowKods)
+	case <-publishCtx.Done():
+		a.store.ReleasePublishReservations(extractSelectionKeys(reservedItems))
+		writeError(w, http.StatusRequestTimeout, fmt.Sprintf("publish zahtjev je otkazan prije ulaska u red: %v", publishCtx.Err()))
+		return
+	}
+
+	var queuedResult queuedPublishResult
+	select {
+	case queuedResult = <-queueReq.responseCh:
+	case <-publishCtx.Done():
+		writeError(w, http.StatusRequestTimeout, fmt.Sprintf("publish zahtjev je otkazan dok je čekao red ili obradu: %v", publishCtx.Err()))
+		return
+	}
+
+	if queuedResult.err != nil {
+		log.Printf("[PUBLISH] request failed status=%d error=%v", queuedResult.status, queuedResult.err)
+		writeError(w, queuedResult.status, queuedResult.err.Error())
 		return
 	}
 
 	log.Printf(
 		"[PUBLISH] completed published=%d skipped=%d failed=%d",
-		len(response.Published),
-		len(response.Skipped),
-		len(response.Failed),
+		len(queuedResult.response.Published),
+		len(queuedResult.response.Skipped),
+		len(queuedResult.response.Failed),
 	)
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, queuedResult.response)
 }
 
-func (a *App) publishCatalogItems(ctx context.Context, selectedTowKods []string) (CatalogPublishResponse, int, error) {
-	state := a.store.State()
-	if len(state.Items) == 0 {
+func (a *App) publishCatalogItems(ctx context.Context, items []CatalogItem) (CatalogPublishResponse, int, error) {
+	if len(items) == 0 {
 		return CatalogPublishResponse{}, http.StatusBadRequest, fmt.Errorf("nema artikala za objavu")
 	}
-
-	selectedSet := make(map[string]struct{}, len(selectedTowKods))
-	for _, towKod := range selectedTowKods {
-		trimmed := strings.TrimSpace(towKod)
-		if trimmed == "" {
-			continue
-		}
-		selectedSet[trimmed] = struct{}{}
-	}
-
-	useSelection := len(selectedSet) > 0
-	log.Printf("[PUBLISH] state totalItems=%d useSelection=%t", len(state.Items), useSelection)
-	if useSelection {
-		foundSelected := false
-		for _, item := range state.Items {
-			if _, ok := selectedSet[item.TowKod]; ok {
-				foundSelected = true
-				break
-			}
-		}
-		if !foundSelected {
-			return CatalogPublishResponse{}, http.StatusBadRequest, fmt.Errorf("nijedan selektovani artikal nije pronađen")
-		}
-	}
+	useSelection := true
+	log.Printf("[PUBLISH] processing queued batch size=%d", len(items))
 
 	document, err := a.loadDescriptionDocument()
 	if err != nil {
@@ -182,15 +187,12 @@ func (a *App) publishCatalogItems(ctx context.Context, selectedTowKods []string)
 	}
 
 	publishedTowKods := make([]string, 0)
+	defer func() {
+		a.store.ReleasePublishReservations(collectUnpublishedSelectionKeys(items, publishedTowKods))
+	}()
 	publishableJobs := make([]publishJob, 0)
 
-	for _, item := range state.Items {
-		if useSelection {
-			if _, ok := selectedSet[item.TowKod]; !ok {
-				continue
-			}
-		}
-
+	for _, item := range items {
 		log.Printf(
 			"[PUBLISH] considering towKod=%s name=%q categoryID=%v images=%d price=%.2f",
 			item.TowKod,
@@ -250,11 +252,10 @@ func (a *App) publishCatalogItems(ctx context.Context, selectedTowKods []string)
 	}
 
 	if len(publishedTowKods) > 0 {
-		if err := a.store.DeleteItemsBulk(publishedTowKods); err != nil {
+		if err := a.store.DeleteItemsBulk(nil, publishedTowKods); err != nil {
 			return CatalogPublishResponse{}, http.StatusInternalServerError, fmt.Errorf("objava je uspela ali čišćenje temp artikala nije uspelo: %w", err)
 		}
 	}
-
 	result.State = a.store.State()
 	result.Message = buildPublishSummaryMessage(len(result.Published), len(result.Skipped), len(result.Failed), useSelection)
 
@@ -272,6 +273,34 @@ func (a *App) publishCatalogItems(ctx context.Context, selectedTowKods []string)
 	}
 
 	return result, http.StatusOK, nil
+}
+
+func extractSelectionKeys(items []CatalogItem) []string {
+	values := make([]string, 0, len(items))
+	for _, item := range items {
+		if strings.TrimSpace(item.SelectionKey) == "" {
+			continue
+		}
+		values = append(values, item.SelectionKey)
+	}
+	return values
+}
+
+func collectUnpublishedSelectionKeys(items []CatalogItem, publishedTowKods []string) []string {
+	publishedSet := make(map[string]struct{}, len(publishedTowKods))
+	for _, towKod := range publishedTowKods {
+		publishedSet[strings.TrimSpace(towKod)] = struct{}{}
+	}
+
+	remaining := make([]string, 0, len(items))
+	for _, item := range items {
+		if _, ok := publishedSet[strings.TrimSpace(item.TowKod)]; ok {
+			continue
+		}
+		remaining = append(remaining, item.SelectionKey)
+	}
+
+	return remaining
 }
 
 func (a *App) publishItemsParallel(
@@ -775,7 +804,7 @@ func (s *OLXCategoryService) doJSONRequest(ctx context.Context, method string, r
 	}
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return nil, fmt.Errorf("OLX API greška (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, formatOLXAPIError(resp.StatusCode, body)
 	}
 
 	return body, nil
@@ -820,7 +849,7 @@ func (s *OLXCategoryService) doMultipartImageUpload(ctx context.Context, listing
 	}
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return nil, fmt.Errorf("OLX API greška (%d): %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
+		return nil, formatOLXAPIError(resp.StatusCode, responseBody)
 	}
 
 	if uploadErr := <-uploadErrCh; uploadErr != nil {

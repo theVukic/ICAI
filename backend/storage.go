@@ -21,6 +21,7 @@ type CatalogStore struct {
 	tempDir         string
 	catalogs        []UploadedCatalog
 	categorizations map[string]ItemCategorySelection
+	pendingPublishes map[string]CatalogItem
 }
 
 var errCatalogAlreadyUploaded = errors.New("fajl je već dodat")
@@ -35,6 +36,7 @@ func NewCatalogStore() (*CatalogStore, error) {
 		tempDir:         tempDir,
 		catalogs:        []UploadedCatalog{},
 		categorizations: map[string]ItemCategorySelection{},
+		pendingPublishes: map[string]CatalogItem{},
 	}
 
 	logEvent("catalog", "catalog store initialized", map[string]any{
@@ -54,6 +56,10 @@ func (s *CatalogStore) State() CatalogState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	return s.buildStateLocked()
+}
+
+func (s *CatalogStore) buildStateLocked() CatalogState {
 	catalogs := make([]UploadedCatalog, len(s.catalogs))
 	copy(catalogs, s.catalogs)
 
@@ -63,6 +69,10 @@ func (s *CatalogStore) State() CatalogState {
 	var lastUpdated *time.Time
 	for _, catalog := range catalogs {
 		for _, item := range catalog.Items {
+			item.SelectionKey = catalogItemSelectionKey(item)
+			if _, hidden := s.pendingPublishes[item.SelectionKey]; hidden {
+				continue
+			}
 			key := item.TowKod + "|" + item.Index
 			if _, exists := seen[key]; exists {
 				continue
@@ -88,6 +98,110 @@ func (s *CatalogStore) State() CatalogState {
 		TotalFiles:  len(catalogs),
 		TotalItems:  len(items),
 		LastUpdated: lastUpdated,
+	}
+}
+
+func catalogItemSelectionKey(item CatalogItem) string {
+	return strings.TrimSpace(item.SourceCatalogID) + "|" + strings.TrimSpace(item.TowKod) + "|" + strings.TrimSpace(item.Index)
+}
+
+type catalogSelectionTargets struct {
+	itemKeys map[string]struct{}
+	towKods  map[string]struct{}
+}
+
+func newCatalogSelectionTargets(itemKeys []string, towKods []string) catalogSelectionTargets {
+	targets := catalogSelectionTargets{
+		itemKeys: make(map[string]struct{}, len(itemKeys)),
+		towKods:  make(map[string]struct{}, len(towKods)),
+	}
+
+	for _, itemKey := range itemKeys {
+		trimmed := strings.TrimSpace(itemKey)
+		if trimmed == "" {
+			continue
+		}
+		targets.itemKeys[trimmed] = struct{}{}
+	}
+
+	for _, towKod := range towKods {
+		trimmed := strings.TrimSpace(towKod)
+		if trimmed == "" {
+			continue
+		}
+		targets.towKods[trimmed] = struct{}{}
+	}
+
+	return targets
+}
+
+func (t catalogSelectionTargets) Empty() bool {
+	return len(t.itemKeys) == 0 && len(t.towKods) == 0
+}
+
+func (t catalogSelectionTargets) Match(item CatalogItem) bool {
+	if len(t.itemKeys) > 0 {
+		_, ok := t.itemKeys[catalogItemSelectionKey(item)]
+		return ok
+	}
+	_, ok := t.towKods[strings.TrimSpace(item.TowKod)]
+	return ok
+}
+
+func (s *CatalogStore) ReserveItemsForPublish(itemKeys []string, towKods []string) ([]CatalogItem, CatalogState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	targets := newCatalogSelectionTargets(itemKeys, towKods)
+	if targets.Empty() {
+		return nil, CatalogState{}, fmt.Errorf("odaberi barem jedan artikal")
+	}
+
+	reserved := make([]CatalogItem, 0, len(itemKeys)+len(towKods))
+	for _, catalog := range s.catalogs {
+		for _, item := range catalog.Items {
+			item.SelectionKey = catalogItemSelectionKey(item)
+			if !targets.Match(item) {
+				continue
+			}
+			if _, alreadyPending := s.pendingPublishes[item.SelectionKey]; alreadyPending {
+				continue
+			}
+
+			itemCopy := item
+			if categorization, ok := s.categorizations[item.TowKod]; ok {
+				copied := categorization
+				itemCopy.Categorization = &copied
+			}
+			s.pendingPublishes[item.SelectionKey] = itemCopy
+			reserved = append(reserved, itemCopy)
+		}
+	}
+
+	if len(reserved) == 0 {
+		return nil, CatalogState{}, fmt.Errorf("artikli nisu pronađeni ili su već u redu za objavu")
+	}
+
+	logEvent("publish", "items reserved for publish queue", map[string]any{
+		"reserved_count": len(reserved),
+		"tow_kods": func() []string {
+			values := make([]string, 0, len(reserved))
+			for _, item := range reserved {
+				values = append(values, item.TowKod)
+			}
+			return values
+		}(),
+	})
+
+	return reserved, s.buildStateLocked(), nil
+}
+
+func (s *CatalogStore) ReleasePublishReservations(towKods []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, key := range towKods {
+		delete(s.pendingPublishes, strings.TrimSpace(key))
 	}
 }
 
@@ -338,6 +452,7 @@ func (s *CatalogStore) Clear() error {
 			}
 			s.catalogs = []UploadedCatalog{}
 			s.categorizations = map[string]ItemCategorySelection{}
+			s.pendingPublishes = map[string]CatalogItem{}
 			return nil
 		}
 		return fmt.Errorf("nije moguće pročitati temp folder: %w", err)
@@ -352,6 +467,7 @@ func (s *CatalogStore) Clear() error {
 
 	s.catalogs = []UploadedCatalog{}
 	s.categorizations = map[string]ItemCategorySelection{}
+	s.pendingPublishes = map[string]CatalogItem{}
 	logEvent("catalog", "catalog store cleared", map[string]any{
 		"temp_dir": s.tempDir,
 	})
@@ -395,7 +511,7 @@ func (s *CatalogStore) SaveCategorization(towKod string, selection ItemCategoryS
 	return CatalogItem{}, fmt.Errorf("%w: %s", errCatalogItemNotFound, towKod)
 }
 
-func (s *CatalogStore) SaveCategorizationBulk(towKods []string, selection ItemCategorySelection) ([]CatalogItem, error) {
+func (s *CatalogStore) SaveCategorizationBulk(itemKeys []string, towKods []string, selection ItemCategorySelection) ([]CatalogItem, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -403,27 +519,20 @@ func (s *CatalogStore) SaveCategorizationBulk(towKods []string, selection ItemCa
 		return nil, fmt.Errorf("kategorija je obavezna")
 	}
 
-	targets := make(map[string]struct{}, len(towKods))
-	for _, towKod := range towKods {
-		trimmed := strings.TrimSpace(towKod)
-		if trimmed == "" {
-			continue
-		}
-		targets[trimmed] = struct{}{}
-	}
-
-	if len(targets) == 0 {
+	targets := newCatalogSelectionTargets(itemKeys, towKods)
+	if targets.Empty() {
 		return nil, fmt.Errorf("odaberi barem jedan artikal")
 	}
 
 	updatedByCatalog := make(map[int]bool)
-	updatedItems := make([]CatalogItem, 0, len(targets))
+	updatedItems := make([]CatalogItem, 0, len(itemKeys)+len(towKods))
 
 	for catalogIndex := range s.catalogs {
 		catalog := &s.catalogs[catalogIndex]
 		for itemIndex := range catalog.Items {
 			item := &catalog.Items[itemIndex]
-			if _, ok := targets[item.TowKod]; !ok {
+			item.SelectionKey = catalogItemSelectionKey(*item)
+			if !targets.Match(*item) {
 				continue
 			}
 
@@ -435,7 +544,6 @@ func (s *CatalogStore) SaveCategorizationBulk(towKods []string, selection ItemCa
 			itemCopy.Categorization = &copied
 			updatedItems = append(updatedItems, itemCopy)
 			updatedByCatalog[catalogIndex] = true
-			delete(targets, item.TowKod)
 		}
 	}
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -42,6 +43,14 @@ type namedTokenFile struct {
 
 type olxDataResponse[T any] struct {
 	Data T `json:"data"`
+}
+
+type olxAPIErrorEnvelope struct {
+	Error *struct {
+		Type    string `json:"type"`
+		Status  int    `json:"status"`
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 type olxMeResponse struct {
@@ -286,7 +295,7 @@ func (s *OLXCategoryService) FindCategories(ctx context.Context, name string) ([
 
 	reqURL := fmt.Sprintf("%s/categories/find?name=%s", olxBaseURL, url.QueryEscape(name))
 	var result []OLXCategorySuggestion
-	if err := s.getJSON(ctx, reqURL, &result); err != nil {
+	if err := s.getJSONWithRetry(ctx, reqURL, &result, "find categories"); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -299,7 +308,7 @@ func (s *OLXCategoryService) SuggestCategories(ctx context.Context, keyword stri
 
 	reqURL := fmt.Sprintf("%s/categories/suggest?keyword=%s", olxBaseURL, url.QueryEscape(keyword))
 	var wrapped olxDataResponse[[]OLXCategorySuggestion]
-	if err := s.getJSON(ctx, reqURL, &wrapped); err != nil {
+	if err := s.getJSONWithRetry(ctx, reqURL, &wrapped, "suggest categories"); err != nil {
 		return nil, err
 	}
 	return wrapped.Data, nil
@@ -308,7 +317,7 @@ func (s *OLXCategoryService) SuggestCategories(ctx context.Context, keyword stri
 func (s *OLXCategoryService) GetCategory(ctx context.Context, categoryID int) (*OLXCategoryNode, error) {
 	reqURL := fmt.Sprintf("%s/category/%d", olxBaseURL, categoryID)
 	var wrapped olxDataResponse[OLXCategoryNode]
-	if err := s.getJSON(ctx, reqURL, &wrapped); err != nil {
+	if err := s.getJSONWithRetry(ctx, reqURL, &wrapped, "get category"); err != nil {
 		return nil, err
 	}
 	return &wrapped.Data, nil
@@ -317,7 +326,7 @@ func (s *OLXCategoryService) GetCategory(ctx context.Context, categoryID int) (*
 func (s *OLXCategoryService) GetCategoryAttributes(ctx context.Context, categoryID int) ([]OLXCategoryAttribute, error) {
 	reqURL := fmt.Sprintf("%s/categories/%d/attributes", olxBaseURL, categoryID)
 	var wrapped olxDataResponse[[]OLXCategoryAttribute]
-	if err := s.getJSON(ctx, reqURL, &wrapped); err != nil {
+	if err := s.getJSONWithRetry(ctx, reqURL, &wrapped, "get category attributes"); err != nil {
 		return nil, err
 	}
 	return wrapped.Data, nil
@@ -326,7 +335,7 @@ func (s *OLXCategoryService) GetCategoryAttributes(ctx context.Context, category
 func (s *OLXCategoryService) GetCategoryBrands(ctx context.Context, categoryID int) ([]OLXBrand, error) {
 	reqURL := fmt.Sprintf("%s/categories/%d/brands", olxBaseURL, categoryID)
 	var wrapped olxDataResponse[[]OLXBrand]
-	if err := s.getJSON(ctx, reqURL, &wrapped); err != nil {
+	if err := s.getJSONWithRetry(ctx, reqURL, &wrapped, "get category brands"); err != nil {
 		return nil, err
 	}
 	return wrapped.Data, nil
@@ -335,7 +344,7 @@ func (s *OLXCategoryService) GetCategoryBrands(ctx context.Context, categoryID i
 func (s *OLXCategoryService) GetCategoryModels(ctx context.Context, categoryID int, brandID int) ([]OLXModel, error) {
 	reqURL := fmt.Sprintf("%s/categories/%d/brands/%d/models", olxBaseURL, categoryID, brandID)
 	var wrapped olxDataResponse[[]OLXModel]
-	if err := s.getJSON(ctx, reqURL, &wrapped); err != nil {
+	if err := s.getJSONWithRetry(ctx, reqURL, &wrapped, "get category models"); err != nil {
 		return nil, err
 	}
 	return wrapped.Data, nil
@@ -362,7 +371,7 @@ func (s *OLXCategoryService) getJSON(ctx context.Context, requestURL string, des
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("OLX API greška (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return formatOLXAPIError(resp.StatusCode, body)
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
@@ -370,6 +379,46 @@ func (s *OLXCategoryService) getJSON(ctx context.Context, requestURL string, des
 	}
 
 	return nil
+}
+
+func (s *OLXCategoryService) getJSONWithRetry(ctx context.Context, requestURL string, dest any, operation string) error {
+	var err error
+	for attempt := 1; attempt <= listingLimitsAttempts; attempt++ {
+		err = s.getJSON(ctx, requestURL, dest)
+		if err == nil {
+			return nil
+		}
+		if !isRetriableOLXRequestError(err) || attempt == listingLimitsAttempts {
+			return err
+		}
+		if waitErr := waitForRetry(ctx, attempt); waitErr != nil {
+			return err
+		}
+		log.Printf("[OLX] %s retry attempt=%d/%d error=%v", operation, attempt+1, listingLimitsAttempts, err)
+	}
+	return err
+}
+
+func formatOLXAPIError(statusCode int, body []byte) error {
+	trimmedBody := strings.TrimSpace(string(body))
+
+	var payload olxAPIErrorEnvelope
+	if err := json.Unmarshal(body, &payload); err == nil && payload.Error != nil {
+		errorType := strings.TrimSpace(payload.Error.Type)
+		message := strings.TrimSpace(payload.Error.Message)
+		if statusCode >= http.StatusInternalServerError || strings.EqualFold(errorType, "internal_error") {
+			return fmt.Errorf("OLX je privremeno nedostupan (%d). Pokušaj ponovo za nekoliko trenutaka", statusCode)
+		}
+		if message != "" {
+			return fmt.Errorf("OLX API greška (%d): %s", statusCode, message)
+		}
+	}
+
+	if statusCode >= http.StatusInternalServerError {
+		return fmt.Errorf("OLX je privremeno nedostupan (%d). Pokušaj ponovo za nekoliko trenutaka", statusCode)
+	}
+
+	return fmt.Errorf("OLX API greška (%d): %s", statusCode, trimmedBody)
 }
 
 func loadOLXTokenConfig(searchRoots []string) (string, string, string, []namedTokenFile) {
@@ -550,7 +599,7 @@ func (a *App) handleCategoryBulk(w http.ResponseWriter, r *http.Request) {
 		Attributes: req.Attributes,
 	}
 
-	items, err := a.store.SaveCategorizationBulk(req.TowKods, selection)
+	items, err := a.store.SaveCategorizationBulk(req.ItemKeys, req.TowKods, selection)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

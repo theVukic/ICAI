@@ -95,7 +95,7 @@ func (a *App) handleCatalogBulkDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.store.DeleteItemsBulk(req.TowKods); err != nil {
+	if err := a.store.DeleteItemsBulk(req.ItemKeys, req.TowKods); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -241,7 +241,7 @@ func (s *CatalogStore) UpdateItemsBulk(req CatalogBulkEditRequest) ([]CatalogIte
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(req.TowKods) == 0 {
+	if len(req.ItemKeys) == 0 && len(req.TowKods) == 0 {
 		return nil, fmt.Errorf("odaberi barem jedan artikal")
 	}
 
@@ -268,27 +268,20 @@ func (s *CatalogStore) UpdateItemsBulk(req CatalogBulkEditRequest) ([]CatalogIte
 		return nil, fmt.Errorf("cijena ne može biti negativna")
 	}
 
-	targets := make(map[string]struct{}, len(req.TowKods))
-	for _, towKod := range req.TowKods {
-		trimmed := strings.TrimSpace(towKod)
-		if trimmed == "" {
-			continue
-		}
-		targets[trimmed] = struct{}{}
-	}
-
-	if len(targets) == 0 {
+	targets := newCatalogSelectionTargets(req.ItemKeys, req.TowKods)
+	if targets.Empty() {
 		return nil, fmt.Errorf("odaberi barem jedan artikal")
 	}
 
 	updatedByCatalog := make(map[int]bool)
-	updatedItems := make([]CatalogItem, 0, len(targets))
+	updatedItems := make([]CatalogItem, 0, len(req.ItemKeys)+len(req.TowKods))
 
 	for catalogIndex := range s.catalogs {
 		catalog := &s.catalogs[catalogIndex]
 		for itemIndex := range catalog.Items {
 			item := &catalog.Items[itemIndex]
-			if _, ok := targets[item.TowKod]; !ok {
+			item.SelectionKey = catalogItemSelectionKey(*item)
+			if !targets.Match(*item) {
 				continue
 			}
 
@@ -307,7 +300,6 @@ func (s *CatalogStore) UpdateItemsBulk(req CatalogBulkEditRequest) ([]CatalogIte
 
 			updatedItems = append(updatedItems, *item)
 			updatedByCatalog[catalogIndex] = true
-			delete(targets, item.TowKod)
 		}
 	}
 
@@ -324,20 +316,12 @@ func (s *CatalogStore) UpdateItemsBulk(req CatalogBulkEditRequest) ([]CatalogIte
 	return updatedItems, nil
 }
 
-func (s *CatalogStore) DeleteItemsBulk(towKods []string) error {
+func (s *CatalogStore) DeleteItemsBulk(itemKeys []string, towKods []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	targets := make(map[string]struct{}, len(towKods))
-	for _, towKod := range towKods {
-		trimmed := strings.TrimSpace(towKod)
-		if trimmed == "" {
-			continue
-		}
-		targets[trimmed] = struct{}{}
-	}
-
-	if len(targets) == 0 {
+	targets := newCatalogSelectionTargets(itemKeys, towKods)
+	if targets.Empty() {
 		return fmt.Errorf("odaberi barem jedan artikal")
 	}
 
@@ -349,11 +333,12 @@ func (s *CatalogStore) DeleteItemsBulk(towKods []string) error {
 		removedFromCatalog := false
 
 		for _, item := range catalog.Items {
-			if _, ok := targets[item.TowKod]; ok {
+			item.SelectionKey = catalogItemSelectionKey(item)
+			if targets.Match(item) {
 				deletedCount++
 				removedFromCatalog = true
-				delete(targets, item.TowKod)
 				delete(s.categorizations, item.TowKod)
+				delete(s.pendingPublishes, item.SelectionKey)
 				continue
 			}
 

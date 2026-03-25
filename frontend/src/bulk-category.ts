@@ -40,6 +40,7 @@ type CatalogStatus = {
 };
 
 type CatalogItem = {
+  selectionKey?: string;
   towKod: string;
   index: string;
   nameB2B: string;
@@ -51,6 +52,10 @@ type CatalogItem = {
   currencyCode: string;
   categorization?: ItemCategorySelection;
 };
+
+function getItemSelectionKey(item: CatalogItem): string {
+  return item.selectionKey || `${item.towKod || ""}|${item.index || ""}`;
+}
 
 type CatalogStateResponse = {
   items: CatalogItem[];
@@ -152,10 +157,7 @@ const state: {
 };
 
 export function mountBulkCategoryPage(root: HTMLDivElement): void {
-  if (!state.isLoading && state.items.length === 0) {
-    void loadBulkCategoryItems(root);
-  }
-
+  void loadBulkCategoryItems(root);
   renderBulkCategoryPage(root);
 }
 
@@ -166,7 +168,18 @@ export function setBulkCategoryPageSession(sessionUsername: string, tokenConfigu
 
 async function loadBulkCategoryItems(root: HTMLDivElement): Promise<void> {
   state.isLoading = true;
+  state.items = [];
   state.message = "";
+  state.searchResults = [];
+  state.selectedCategory = null;
+  state.attributes = [];
+  state.brands = [];
+  state.models = [];
+  state.selectedBrandId = "";
+  state.selectedModelId = "";
+  state.attributeValues = {};
+  state.validationMessage = "";
+  state.invalidFields = [];
   renderBulkCategoryPage(root);
 
   try {
@@ -179,7 +192,7 @@ async function loadBulkCategoryItems(root: HTMLDivElement): Promise<void> {
 
     const catalogState = data as CatalogStateResponse;
     const selectedSet = new Set(selectedTowKods);
-    state.items = catalogState.items.filter((item) => selectedSet.has(item.towKod));
+    state.items = catalogState.items.filter((item) => selectedSet.has(getItemSelectionKey(item)));
 
     if (state.items.length === 0) {
       state.message = "Nema odabranih artikala za kategorizaciju.";
@@ -588,6 +601,7 @@ function bindBulkCategoryEvents(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          itemKeys: state.items.map((item) => getItemSelectionKey(item)),
           towKods: state.items.map((item) => item.towKod),
           category: state.selectedCategory,
           brand: selectedBrand || null,

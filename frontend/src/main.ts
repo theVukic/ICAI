@@ -32,6 +32,7 @@ type CatalogStatus = {
 };
 
 type CatalogItem = {
+  selectionKey?: string;
   towKod: string;
   index: string;
   nameB2B: string;
@@ -49,6 +50,10 @@ type CatalogItem = {
     };
   };
 };
+
+function getItemSelectionKey(item: CatalogItem): string {
+  return item.selectionKey || `${item.towKod || ""}|${item.index || ""}`;
+}
 
 type UploadedCatalog = {
   id: string;
@@ -98,8 +103,6 @@ type PublishResponse = {
 };
 
 type PublishOptimisticSnapshot = {
-  data: CatalogState;
-  imageIndexes: Record<string, number>;
   selectedTowKods: string[];
   selectAllMode: boolean;
   selectionPulseTowKods: string[];
@@ -159,7 +162,7 @@ const state: {
   selectAllMode: boolean;
   selectedTowKods: string[];
   isDeletingSelected: boolean;
-  isPublishing: boolean;
+  activePublishCount: number;
   selectionPulseTowKods: string[];
   animateItemsIn: boolean;
   sessionUsername: string;
@@ -206,7 +209,7 @@ const state: {
   selectAllMode: loadStoredSelectAllMode(),
   selectedTowKods: loadStoredSelectedTowKods(),
   isDeletingSelected: false,
-  isPublishing: false,
+  activePublishCount: 0,
   selectionPulseTowKods: [],
   animateItemsIn: false,
   sessionUsername: "",
@@ -501,11 +504,12 @@ function render(): void {
   const cards = sortedItems
     .map((item) => {
       const imageKey = item.towKod || item.index || item.nameB2B;
-      const isSelected = item.towKod
-        ? state.selectedTowKods.includes(item.towKod)
+      const selectionKey = getItemSelectionKey(item);
+      const isSelected = selectionKey
+        ? state.selectedTowKods.includes(selectionKey)
         : false;
-      const shouldPulse = item.towKod
-        ? state.selectionPulseTowKods.includes(item.towKod)
+      const shouldPulse = selectionKey
+        ? state.selectionPulseTowKods.includes(selectionKey)
         : false;
       const currentImageIndex = Math.min(
         state.imageIndexes[imageKey] ?? 0,
@@ -519,7 +523,7 @@ function render(): void {
       const hasCategorization = Boolean(item.categorization?.category?.id);
 
       return `
-        <article class="product-card ${state.viewMode === "list" ? "list-mode" : ""} ${state.selectionMode ? "selection-enabled" : ""} ${isSelected ? "is-selected" : ""} ${shouldPulse ? "selection-pulse" : ""}" data-select-card="${escapeHtml(item.towKod || "")}">
+        <article class="product-card ${state.viewMode === "list" ? "list-mode" : ""} ${state.selectionMode ? "selection-enabled" : ""} ${isSelected ? "is-selected" : ""} ${shouldPulse ? "selection-pulse" : ""}" data-select-card="${escapeHtml(selectionKey)}">
           <div class="product-media">
             ${
               isSelected
@@ -764,7 +768,7 @@ function render(): void {
           </div>
           <div class="toolbar-action">
             <button class="publish-button" id="publishButton" type="button" ${
-              state.isPublishing || isPublishBlocked() ? "disabled" : ""
+              isPublishBlocked() ? "disabled" : ""
             }>
               <span class="button-icon">${publishIcon}</span>
             </button>
@@ -1007,7 +1011,7 @@ function bindEvents(): void {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          towKods: state.selectedTowKods,
+          itemKeys: state.selectedTowKods,
         }),
       });
 
@@ -1040,7 +1044,18 @@ function bindEvents(): void {
   });
 
   publishButton?.addEventListener("click", async () => {
-    if (state.isPublishing || state.data.items.length === 0) {
+    if (state.data.items.length === 0) {
+      return;
+    }
+
+    const hasAnyCategorizedItem = state.data.items.some((item) =>
+      Boolean(item.categorization?.category?.id),
+    );
+    if (!hasAnyCategorizedItem) {
+      state.message = "Odaberite kategoriju artiklima!";
+      state.messageTone = "danger";
+      notyf.error("Odaberite kategoriju artiklima!");
+      render();
       return;
     }
 
@@ -1060,25 +1075,24 @@ function bindEvents(): void {
       return;
     }
 
-    const requestSelectedTowKods = [...state.selectedTowKods];
     const optimisticSnapshot = createPublishOptimisticSnapshot();
 
     console.log("[PUBLISH] click", {
       selectedTowKods: state.selectedTowKods,
       totalItems: state.data.items.length,
       selectedItems: state.data.items.filter((item) =>
-        state.selectedTowKods.includes(item.towKod),
+        state.selectedTowKods.includes(getItemSelectionKey(item)),
       ),
       categorizableItems: state.data.items.filter(
         (item) => Boolean(item.categorization?.category?.id),
       ),
     });
 
-    state.isPublishing = true;
+    state.activePublishCount += 1;
     state.message =
       state.selectedTowKods.length > 0
-        ? "Objavljujem selektovane artikle sa zelenom kategorizacijom..."
-        : "Objavljujem sve artikle sa zelenom kategorizacijom...";
+        ? "Dodajem selektovane artikle u red za objavu..."
+        : "Dodajem artikle u red za objavu...";
     state.messageTone = "muted";
     applyOptimisticPublishRemoval(publishTowKods);
     render();
@@ -1095,7 +1109,10 @@ function bindEvents(): void {
       }
 
       const requestBody = {
-        selectedTowKods: requestSelectedTowKods,
+        selectedItemKeys: publishTowKods,
+        selectedTowKods: state.data.items
+          .filter((item) => publishTowKods.includes(getItemSelectionKey(item)))
+          .map((item) => item.towKod),
       };
       console.log("[PUBLISH] request body", requestBody);
 
@@ -1118,7 +1135,6 @@ function bindEvents(): void {
       }
 
       const publishData = data as PublishResponse;
-      state.data = publishData.state;
       if (publishData.listingLimits) {
         applyListingLimits(publishData.listingLimits);
       } else if (state.listingLimitRemaining !== null && !state.listingLimitUnlimited) {
@@ -1128,11 +1144,7 @@ function bindEvents(): void {
         );
       }
       recordPublishSessionOutcome(publishData.published.length, publishData.failed.length);
-      state.imageIndexes = filterImageIndexesByItems(state.imageIndexes, state.data.items);
-      state.selectedTowKods = state.selectedTowKods.filter((towKod) =>
-        state.data.items.some((item) => item.towKod === towKod),
-      );
-      reconcileSelectionState();
+      await syncCatalogStateFromBackend();
 
       const summaryParts = [
         `Objavljeno ${publishData.published.length}`,
@@ -1152,14 +1164,16 @@ function bindEvents(): void {
             : "muted";
       showPublishOutcomeToasts(publishData.published.length, publishData.failed.length);
     } catch (error) {
-      restorePublishSnapshot(optimisticSnapshot);
       console.error("[PUBLISH] frontend error", error);
-      state.message =
-        error instanceof Error ? error.message : "Objava nije uspela.";
-      state.messageTone = "danger";
+      const restored = await reloadStateAfterPublishFailure(optimisticSnapshot);
+      if (!restored) {
+        state.message =
+          error instanceof Error ? error.message : "Objava nije uspela.";
+        state.messageTone = "danger";
+      }
       showPublishErrorToast(publishTowKods.length);
     } finally {
-      state.isPublishing = false;
+      state.activePublishCount = Math.max(0, state.activePublishCount - 1);
       render();
     }
   });
@@ -1380,7 +1394,6 @@ async function loadState(): Promise<void> {
     const nextData = data as CatalogState;
     applyListingLimits(await limitsPromise);
     if (
-      !state.isPublishing &&
       !state.isUploading &&
       !state.isPickingFiles &&
       !isMainRefreshSuspended()
@@ -1391,7 +1404,6 @@ async function loadState(): Promise<void> {
       scheduleCategoryPrefetch(state.data.items);
     }
     if (
-      !state.isPublishing &&
       !state.isUploading &&
       !state.isPickingFiles &&
       !isMainRefreshSuspended() &&
@@ -1500,7 +1512,7 @@ function resetProtectedState(): void {
   state.selectedTowKods = [];
   state.selectionPulseTowKods = [];
   state.selectAllMode = false;
-  state.isPublishing = false;
+  state.activePublishCount = 0;
   state.isUploading = false;
   state.isPickingFiles = false;
   state.listingLimitRemaining = null;
@@ -1636,7 +1648,6 @@ function isPublishBlocked(): boolean {
 function refreshMainPageFromStore(): void {
   if (
     shouldPauseAuthPollingForCurrentPath() ||
-    state.isPublishing ||
     state.isUploading ||
     state.isPickingFiles ||
     isMainRefreshSuspended()
@@ -1894,23 +1905,22 @@ function getPublishCandidateTowKods(): string[] {
 
   return state.data.items
     .filter((item) => {
-      if (!item.towKod) {
+      const selectionKey = getItemSelectionKey(item);
+      if (!selectionKey) {
         return false;
       }
 
       if (hasSelection) {
-        return selectedSet.has(item.towKod);
+        return selectedSet.has(selectionKey);
       }
 
       return Boolean(item.categorization?.category?.id);
     })
-    .map((item) => item.towKod);
+    .map((item) => getItemSelectionKey(item));
 }
 
 function createPublishOptimisticSnapshot(): PublishOptimisticSnapshot {
   return {
-    data: state.data,
-    imageIndexes: { ...state.imageIndexes },
     selectedTowKods: [...state.selectedTowKods],
     selectAllMode: state.selectAllMode,
     selectionPulseTowKods: [...state.selectionPulseTowKods],
@@ -1919,7 +1929,7 @@ function createPublishOptimisticSnapshot(): PublishOptimisticSnapshot {
 
 function applyOptimisticPublishRemoval(publishTowKods: string[]): void {
   const publishSet = new Set(publishTowKods);
-  const nextItems = state.data.items.filter((item) => !publishSet.has(item.towKod));
+  const nextItems = state.data.items.filter((item) => !publishSet.has(getItemSelectionKey(item)));
 
   state.data = {
     ...state.data,
@@ -1933,11 +1943,41 @@ function applyOptimisticPublishRemoval(publishTowKods: string[]): void {
 }
 
 function restorePublishSnapshot(snapshot: PublishOptimisticSnapshot): void {
-  state.data = snapshot.data;
-  state.imageIndexes = snapshot.imageIndexes;
   state.selectedTowKods = snapshot.selectedTowKods;
   state.selectAllMode = snapshot.selectAllMode;
   state.selectionPulseTowKods = snapshot.selectionPulseTowKods;
+  reconcileSelectionState();
+}
+
+async function reloadStateAfterPublishFailure(
+  snapshot: PublishOptimisticSnapshot,
+): Promise<boolean> {
+  try {
+    await syncCatalogStateFromBackend();
+    restorePublishSnapshot(snapshot);
+    scheduleCategoryPrefetch(state.data.items);
+    state.message = "Objava nije uspela. Artikli su vraceni na stranicu.";
+    state.messageTone = "danger";
+    return true;
+  } catch {
+    restorePublishSnapshot(snapshot);
+    return false;
+  }
+}
+
+async function syncCatalogStateFromBackend(): Promise<void> {
+  const response = await fetch("/api/catalog");
+  const data = (await response.json()) as CatalogResponse;
+  if (!response.ok) {
+    throw new Error("error" in data ? data.error : "Ucitavanje nije uspelo.");
+  }
+
+  state.data = data as CatalogState;
+  state.imageIndexes = filterImageIndexesByItems(state.imageIndexes, state.data.items);
+  ensureImageIndexesForItems(state.data.items);
+  state.selectedTowKods = state.selectedTowKods.filter((towKod) =>
+    state.data.items.some((item) => getItemSelectionKey(item) === towKod),
+  );
   reconcileSelectionState();
 }
 
@@ -1958,7 +1998,7 @@ function showPublishErrorToast(failedCount: number): void {
 
 function getSelectableTowKods(items: CatalogItem[]): string[] {
   return items
-    .map((item) => item.towKod)
+    .map((item) => getItemSelectionKey(item))
     .filter((towKod): towKod is string => Boolean(towKod));
 }
 
@@ -2008,6 +2048,15 @@ function filterImageIndexesByItems(
   return Object.fromEntries(
     Object.entries(imageIndexes).filter(([key]) => allowedKeys.has(key)),
   );
+}
+
+function ensureImageIndexesForItems(items: CatalogItem[]): void {
+  for (const item of items) {
+    const imageKey = item.towKod || item.index || item.nameB2B;
+    if (!(imageKey in state.imageIndexes)) {
+      state.imageIndexes[imageKey] = 0;
+    }
+  }
 }
 
 function loadStoredSortMode(): SortMode {

@@ -19,6 +19,7 @@ type CatalogPayload struct {
 }
 
 type CatalogItem struct {
+	SelectionKey         string                 `json:"selectionKey,omitempty"`
 	TowKod               string                 `json:"towKod"`
 	Index                string                 `json:"index"`
 	NameB2B              string                 `json:"nameB2B"`
@@ -64,7 +65,8 @@ type CatalogItemEditRequest struct {
 }
 
 type CatalogBulkEditRequest struct {
-	TowKods      []string `json:"towKods"`
+	ItemKeys     []string `json:"itemKeys,omitempty"`
+	TowKods      []string `json:"towKods,omitempty"`
 	Name         *string  `json:"name,omitempty"`
 	Price        *float64 `json:"price,omitempty"`
 	Description  *string  `json:"description,omitempty"`
@@ -72,7 +74,8 @@ type CatalogBulkEditRequest struct {
 }
 
 type CatalogBulkDeleteRequest struct {
-	TowKods []string `json:"towKods"`
+	ItemKeys []string `json:"itemKeys,omitempty"`
+	TowKods  []string `json:"towKods,omitempty"`
 }
 
 type ItemCategorySelection struct {
@@ -96,7 +99,8 @@ type CategorySaveRequest struct {
 }
 
 type CategoryBulkSaveRequest struct {
-	TowKods    []string          `json:"towKods"`
+	ItemKeys   []string          `json:"itemKeys,omitempty"`
+	TowKods    []string          `json:"towKods,omitempty"`
 	Category   *OLXCategoryNode  `json:"category"`
 	Brand      *OLXBrand         `json:"brand,omitempty"`
 	Model      *OLXModel         `json:"model,omitempty"`
@@ -212,6 +216,7 @@ type DescriptionRenderResponse struct {
 }
 
 type CatalogPublishRequest struct {
+	SelectedItemKeys []string `json:"selectedItemKeys,omitempty"`
 	SelectedTowKods []string `json:"selectedTowKods"`
 }
 

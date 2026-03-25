@@ -36,6 +36,19 @@ type App struct {
 	descriptionDir string
 	olxCategories  *OLXCategoryService
 	auth           *AuthManager
+	publishQueue   chan queuedPublishRequest
+}
+
+type queuedPublishRequest struct {
+	ctx          context.Context
+	items         []CatalogItem
+	responseCh   chan queuedPublishResult
+}
+
+type queuedPublishResult struct {
+	response CatalogPublishResponse
+	status   int
+	err      error
 }
 
 type loggingResponseWriter struct {
@@ -99,6 +112,7 @@ func NewApp() (*App, error) {
 			filepath.Join(workDir, "backend"),
 			workDir,
 		}),
+		publishQueue: make(chan queuedPublishRequest, 128),
 	}
 
 	logEvent("startup", "application paths resolved", map[string]any{
@@ -126,7 +140,24 @@ func NewApp() (*App, error) {
 		Handler: app.withHTTPLogging(mux),
 	}
 
+	go app.processPublishQueue()
+
 	return app, nil
+}
+
+func (a *App) processPublishQueue() {
+	for req := range a.publishQueue {
+		result := queuedPublishResult{}
+
+		if err := req.ctx.Err(); err != nil {
+			result.status = http.StatusRequestTimeout
+			result.err = fmt.Errorf("publish zahtjev je otkazan prije obrade: %w", err)
+		} else {
+			result.response, result.status, result.err = a.publishCatalogItems(req.ctx, req.items)
+		}
+
+		req.responseCh <- result
+	}
 }
 
 func (a *App) Run() error {

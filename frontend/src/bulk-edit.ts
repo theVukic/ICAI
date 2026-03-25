@@ -34,6 +34,7 @@ type CatalogStatus = {
 };
 
 type CatalogItem = {
+  selectionKey?: string;
   towKod: string;
   index: string;
   nameB2B: string;
@@ -45,6 +46,10 @@ type CatalogItem = {
   currencyCode: string;
   sourceFileName?: string;
 };
+
+function getItemSelectionKey(item: CatalogItem): string {
+  return item.selectionKey || `${item.towKod || ""}|${item.index || ""}`;
+}
 
 type UploadedCatalog = {
   id: string;
@@ -86,10 +91,7 @@ const state: {
 };
 
 export function mountBulkEditPage(root: HTMLDivElement): void {
-  if (!state.isLoading && state.items.length === 0) {
-    void loadBulkEditItems(root);
-  }
-
+  void loadBulkEditItems(root);
   renderBulkEditPage(root);
 }
 
@@ -100,6 +102,7 @@ export function setBulkEditPageSession(sessionUsername: string, tokenConfigured:
 
 async function loadBulkEditItems(root: HTMLDivElement): Promise<void> {
   state.isLoading = true;
+  state.items = [];
   state.message = "";
   renderBulkEditPage(root);
 
@@ -113,7 +116,7 @@ async function loadBulkEditItems(root: HTMLDivElement): Promise<void> {
 
     const catalogState = data as CatalogState;
     const selectedSet = new Set(selectedTowKods);
-    state.items = catalogState.items.filter((item) => selectedSet.has(item.towKod));
+    state.items = catalogState.items.filter((item) => selectedSet.has(getItemSelectionKey(item)));
 
     if (state.items.length === 0) {
       state.message = "Nema odabranih artikala za promjenu.";
@@ -282,6 +285,7 @@ function bindBulkEditEvents(root: HTMLDivElement): void {
     }
 
     const payload: Record<string, unknown> = {
+      itemKeys: state.items.map((item) => getItemSelectionKey(item)),
       towKods: state.items.map((item) => item.towKod),
     };
 
