@@ -1,10 +1,13 @@
 package main
 
 import (
+	"archive/zip"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"os"
 	"path/filepath"
@@ -19,6 +22,8 @@ type CatalogStore struct {
 	catalogs        []UploadedCatalog
 	categorizations map[string]ItemCategorySelection
 }
+
+var errCatalogAlreadyUploaded = errors.New("fajl je već dodat")
 
 func NewCatalogStore() (*CatalogStore, error) {
 	tempDir, err := os.MkdirTemp("", "icai-*")
@@ -90,33 +95,51 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if filepath.Ext(header.Filename) != ".json" {
-		return UploadedCatalog{}, fmt.Errorf("fajl %s nije .json", header.Filename)
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext != ".json" && ext != ".zip" {
+		return UploadedCatalog{}, fmt.Errorf("fajl %s nije .json ili .zip", header.Filename)
+	}
+	for _, existingCatalog := range s.catalogs {
+		if strings.EqualFold(strings.TrimSpace(existingCatalog.FileName), strings.TrimSpace(header.Filename)) {
+			return UploadedCatalog{}, fmt.Errorf("%w: %s", errCatalogAlreadyUploaded, header.Filename)
+		}
 	}
 
-	payload := CatalogPayload{}
-	if err := json.NewDecoder(file).Decode(&payload); err != nil {
-		return UploadedCatalog{}, fmt.Errorf("neispravan JSON u fajlu %s: %w", header.Filename, err)
+	safeName := fmt.Sprintf("%s-%s", generateID(), filepath.Base(header.Filename))
+	uploadedPath := filepath.Join(s.tempDir, safeName)
+	out, err := os.Create(uploadedPath)
+	if err != nil {
+		return UploadedCatalog{}, fmt.Errorf("nije moguće sačuvati fajl %s: %w", header.Filename, err)
+	}
+
+	if _, err := io.Copy(out, file); err != nil {
+		_ = out.Close()
+		return UploadedCatalog{}, fmt.Errorf("nije moguće upisati fajl %s: %w", header.Filename, err)
+	}
+	if err := out.Close(); err != nil {
+		return UploadedCatalog{}, fmt.Errorf("nije moguće zatvoriti fajl %s: %w", header.Filename, err)
+	}
+
+	var (
+		payload   CatalogPayload
+		savedPath string
+	)
+	switch ext {
+	case ".json":
+		payload, err = loadCatalogPayloadFromFile(uploadedPath, header.Filename)
+		savedPath = uploadedPath
+	case ".zip":
+		payload, savedPath, err = extractCatalogZip(uploadedPath, s.tempDir, header.Filename)
+		if err == nil {
+			_ = os.Remove(uploadedPath)
+		}
+	}
+	if err != nil {
+		return UploadedCatalog{}, err
 	}
 
 	if len(payload.Items) == 0 {
 		return UploadedCatalog{}, fmt.Errorf("fajl %s ne sadrži artikle", header.Filename)
-	}
-
-	if _, err := file.Seek(0, 0); err != nil {
-		return UploadedCatalog{}, fmt.Errorf("nije moguće vratiti čitanje fajla %s: %w", header.Filename, err)
-	}
-
-	safeName := fmt.Sprintf("%s-%s", generateID(), filepath.Base(header.Filename))
-	savedPath := filepath.Join(s.tempDir, safeName)
-	out, err := os.Create(savedPath)
-	if err != nil {
-		return UploadedCatalog{}, fmt.Errorf("nije moguće sačuvati fajl %s: %w", header.Filename, err)
-	}
-	defer out.Close()
-
-	if _, err := out.ReadFrom(file); err != nil {
-		return UploadedCatalog{}, fmt.Errorf("nije moguće upisati fajl %s: %w", header.Filename, err)
 	}
 
 	catalogID := generateID()
@@ -144,6 +167,163 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 		"source_file": header.Filename,
 	})
 	return catalog, nil
+}
+
+func loadCatalogPayloadFromFile(path string, sourceFileName string) (CatalogPayload, error) {
+	input, err := os.Open(path)
+	if err != nil {
+		return CatalogPayload{}, fmt.Errorf("nije moguće otvoriti fajl %s: %w", sourceFileName, err)
+	}
+	defer input.Close()
+
+	var payload CatalogPayload
+	if err := json.NewDecoder(input).Decode(&payload); err != nil {
+		return CatalogPayload{}, fmt.Errorf("neispravan JSON u fajlu %s: %w", sourceFileName, err)
+	}
+
+	return payload, nil
+}
+
+func extractCatalogZip(zipPath string, tempDir string, sourceFileName string) (CatalogPayload, string, error) {
+	bundleDir := filepath.Join(tempDir, generateID())
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		return CatalogPayload{}, "", fmt.Errorf("nije moguće pripremiti temp folder za %s: %w", sourceFileName, err)
+	}
+
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		_ = os.RemoveAll(bundleDir)
+		return CatalogPayload{}, "", fmt.Errorf("nije moguće otvoriti ZIP %s: %w", sourceFileName, err)
+	}
+	defer reader.Close()
+
+	var catalogJSONPath string
+	for _, file := range reader.File {
+		entryPath, pathErr := safeZipJoin(bundleDir, file.Name)
+		if pathErr != nil {
+			_ = os.RemoveAll(bundleDir)
+			return CatalogPayload{}, "", fmt.Errorf("ZIP %s sadrži neispravnu putanju: %w", sourceFileName, pathErr)
+		}
+
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(entryPath, 0o755); err != nil {
+				_ = os.RemoveAll(bundleDir)
+				return CatalogPayload{}, "", fmt.Errorf("nije moguće kreirati folder iz ZIP-a %s: %w", sourceFileName, err)
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(entryPath), 0o755); err != nil {
+			_ = os.RemoveAll(bundleDir)
+			return CatalogPayload{}, "", fmt.Errorf("nije moguće pripremiti putanju iz ZIP-a %s: %w", sourceFileName, err)
+		}
+
+		input, err := file.Open()
+		if err != nil {
+			_ = os.RemoveAll(bundleDir)
+			return CatalogPayload{}, "", fmt.Errorf("nije moguće pročitati ZIP stavku %s: %w", file.Name, err)
+		}
+
+		output, err := os.Create(entryPath)
+		if err != nil {
+			_ = input.Close()
+			_ = os.RemoveAll(bundleDir)
+			return CatalogPayload{}, "", fmt.Errorf("nije moguće sačuvati ZIP stavku %s: %w", file.Name, err)
+		}
+
+		_, copyErr := io.Copy(output, input)
+		closeErr := output.Close()
+		_ = input.Close()
+		if copyErr != nil {
+			_ = os.RemoveAll(bundleDir)
+			return CatalogPayload{}, "", fmt.Errorf("nije moguće raspakovati ZIP stavku %s: %w", file.Name, copyErr)
+		}
+		if closeErr != nil {
+			_ = os.RemoveAll(bundleDir)
+			return CatalogPayload{}, "", fmt.Errorf("nije moguće zatvoriti ZIP stavku %s: %w", file.Name, closeErr)
+		}
+
+		if strings.EqualFold(filepath.Base(file.Name), "catalog.json") && catalogJSONPath == "" {
+			catalogJSONPath = entryPath
+		}
+	}
+
+	if catalogJSONPath == "" {
+		_ = os.RemoveAll(bundleDir)
+		return CatalogPayload{}, "", fmt.Errorf("ZIP %s ne sadrži catalog.json", sourceFileName)
+	}
+
+	payload, err := loadCatalogPayloadFromFile(catalogJSONPath, sourceFileName)
+	if err != nil {
+		_ = os.RemoveAll(bundleDir)
+		return CatalogPayload{}, "", err
+	}
+
+	resolveCatalogImagePaths(&payload, bundleDir)
+	return payload, catalogJSONPath, nil
+}
+
+func resolveCatalogImagePaths(payload *CatalogPayload, rootDir string) {
+	if payload == nil {
+		return
+	}
+
+	for itemIndex := range payload.Items {
+		for imageIndex := range payload.Items[itemIndex].Images {
+			image := &payload.Items[itemIndex].Images[imageIndex]
+			trimmedPath := strings.TrimSpace(image.Path)
+			if trimmedPath == "" {
+				continue
+			}
+			if filepath.IsAbs(trimmedPath) {
+				if _, err := os.Stat(trimmedPath); err == nil {
+					image.Path = trimmedPath
+				}
+				continue
+			}
+
+			absolutePath := filepath.Join(rootDir, filepath.FromSlash(trimmedPath))
+			if _, err := os.Stat(absolutePath); err == nil {
+				image.Path = absolutePath
+			}
+		}
+	}
+}
+
+func safeZipJoin(baseDir string, zipEntry string) (string, error) {
+	cleanBase := filepath.Clean(baseDir)
+	targetPath := filepath.Join(cleanBase, filepath.FromSlash(zipEntry))
+	cleanTarget := filepath.Clean(targetPath)
+	baseWithSeparator := cleanBase + string(os.PathSeparator)
+	if cleanTarget != cleanBase && !strings.HasPrefix(cleanTarget, baseWithSeparator) {
+		return "", fmt.Errorf("putanja izlazi iz temp foldera")
+	}
+	return cleanTarget, nil
+}
+
+func (s *CatalogStore) removeCatalogFiles(catalog UploadedCatalog) error {
+	if strings.TrimSpace(catalog.SavedPath) == "" {
+		return nil
+	}
+
+	targetPath := filepath.Clean(catalog.SavedPath)
+	tempRoot := filepath.Clean(s.tempDir)
+	tempRootWithSeparator := tempRoot + string(os.PathSeparator)
+
+	if strings.HasPrefix(targetPath, tempRootWithSeparator) {
+		parentDir := filepath.Dir(targetPath)
+		if parentDir != tempRoot {
+			if err := os.RemoveAll(parentDir); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			return nil
+		}
+	}
+
+	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func (s *CatalogStore) Clear() error {

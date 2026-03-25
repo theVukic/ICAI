@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/draw"
@@ -19,7 +20,9 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +35,12 @@ const (
 	blurRadius           = 18
 	uploadJPEGQuality    = 92
 	publishWorkerCount   = 2
+	imageUploadAttempts  = 2
+	createListingAttempts = 2
+	publishListingAttempts = 3
+	listingLimitsAttempts = 3
+	retryBaseDelay       = 2 * time.Second
+	largeBatchThreshold  = 20
 )
 
 type publishJob struct {
@@ -250,7 +259,7 @@ func (a *App) publishCatalogItems(ctx context.Context, selectedTowKods []string)
 	result.Message = buildPublishSummaryMessage(len(result.Published), len(result.Skipped), len(result.Failed), useSelection)
 
 	if a.olxCategories != nil && a.olxCategories.HasToken() {
-		limits, limitsErr := a.olxCategories.GetListingLimits(ctx)
+		limits, limitsErr := a.olxCategories.GetListingLimitsWithRetry(ctx)
 		if limitsErr != nil {
 			log.Printf("[PUBLISH] listing limits refresh failed: %v", limitsErr)
 		} else {
@@ -271,7 +280,7 @@ func (a *App) publishItemsParallel(
 	document DescriptionDocument,
 	attributeCache *categoryAttributesCache,
 ) []publishOutcome {
-	workerCount := publishWorkerCount
+	workerCount := effectivePublishWorkerCount(len(jobs))
 	if len(jobs) < workerCount {
 		workerCount = len(jobs)
 	}
@@ -334,7 +343,7 @@ func (a *App) publishSingleItem(
 	payloadPreview, _ := json.Marshal(listingPayload)
 	log.Printf("[PUBLISH] create listing towKod=%s payload=%s", item.TowKod, string(payloadPreview))
 
-	listingID, err := a.olxCategories.CreateListing(ctx, listingPayload)
+	listingID, err := a.olxCategories.CreateListingWithRetry(ctx, item.TowKod, listingPayload)
 	if err != nil {
 		return 0, err
 	}
@@ -362,7 +371,7 @@ func (a *App) publishSingleItem(
 		}
 	}
 
-	if err := a.olxCategories.PublishListing(ctx, listingID); err != nil {
+	if err := a.olxCategories.PublishListingWithRetry(ctx, item.TowKod, listingID); err != nil {
 		return 0, err
 	}
 
@@ -447,7 +456,7 @@ func (c *categoryAttributesCache) Get(
 func (a *App) uploadListingImages(ctx context.Context, listingID int, images []CatalogImage) (int, error) {
 	sortedImages := make([]CatalogImage, 0, len(images))
 	for _, image := range images {
-		if strings.TrimSpace(image.URL) == "" {
+		if strings.TrimSpace(image.URL) == "" && strings.TrimSpace(image.Path) == "" {
 			continue
 		}
 		sortedImages = append(sortedImages, image)
@@ -484,6 +493,13 @@ func extractImageURLs(images []CatalogImage) []string {
 		urls = append(urls, image.URL)
 	}
 	return urls
+}
+
+func effectivePublishWorkerCount(jobCount int) int {
+	if jobCount >= largeBatchThreshold {
+		return 1
+	}
+	return publishWorkerCount
 }
 
 func buildListingTitle(item CatalogItem) string {
@@ -618,10 +634,46 @@ func (s *OLXCategoryService) CreateListing(ctx context.Context, payload olxCreat
 	return 0, fmt.Errorf("OLX create listing odgovor ne sadrži id")
 }
 
+func (s *OLXCategoryService) CreateListingWithRetry(ctx context.Context, towKod string, payload olxCreateListingRequest) (int, error) {
+	var listingID int
+	var err error
+	for attempt := 1; attempt <= createListingAttempts; attempt++ {
+		listingID, err = s.CreateListing(ctx, payload)
+		if err == nil {
+			return listingID, nil
+		}
+		if !isRetriableOLXRequestError(err) || attempt == createListingAttempts {
+			return 0, err
+		}
+		if waitErr := waitForRetry(ctx, attempt); waitErr != nil {
+			return 0, err
+		}
+		log.Printf("[OLX] create listing retry towKod=%s attempt=%d/%d error=%v", towKod, attempt+1, createListingAttempts, err)
+	}
+	return 0, err
+}
+
 func (s *OLXCategoryService) UploadListingImages(ctx context.Context, listingID int, images []CatalogImage) ([]olxImageUploadResponse, error) {
-	body, err := s.doMultipartImageUpload(ctx, listingID, images)
-	if err != nil {
-		return nil, fmt.Errorf("upload slika nije uspeo: %w", err)
+	var body []byte
+	var err error
+	for attempt := 1; attempt <= imageUploadAttempts; attempt++ {
+		body, err = s.doMultipartImageUpload(ctx, listingID, images)
+		if err == nil {
+			break
+		}
+		if !isRetriableOLXRequestError(err) || attempt == imageUploadAttempts {
+			return nil, fmt.Errorf("upload slika nije uspeo: %w", err)
+		}
+		if waitErr := waitForRetry(ctx, attempt); waitErr != nil {
+			return nil, fmt.Errorf("upload slika nije uspeo: %w", err)
+		}
+		log.Printf(
+			"[OLX] image upload retry listingID=%d attempt=%d/%d error=%v",
+			listingID,
+			attempt+1,
+			imageUploadAttempts,
+			err,
+		)
 	}
 
 	log.Printf("[OLX] image upload response listingID=%d response=%s", listingID, strings.TrimSpace(string(body)))
@@ -669,6 +721,24 @@ func (s *OLXCategoryService) PublishListing(ctx context.Context, listingID int) 
 	}
 	log.Printf("[OLX] publish response listingID=%d response=%s", listingID, strings.TrimSpace(string(body)))
 	return nil
+}
+
+func (s *OLXCategoryService) PublishListingWithRetry(ctx context.Context, towKod string, listingID int) error {
+	var err error
+	for attempt := 1; attempt <= publishListingAttempts; attempt++ {
+		err = s.PublishListing(ctx, listingID)
+		if err == nil {
+			return nil
+		}
+		if !isRetriableOLXRequestError(err) || attempt == publishListingAttempts {
+			return err
+		}
+		if waitErr := waitForRetry(ctx, attempt); waitErr != nil {
+			return err
+		}
+		log.Printf("[OLX] publish retry towKod=%s listingID=%d attempt=%d/%d error=%v", towKod, listingID, attempt+1, publishListingAttempts, err)
+	}
+	return err
 }
 
 func (s *OLXCategoryService) doJSONRequest(ctx context.Context, method string, requestURL string, payload any) ([]byte, error) {
@@ -738,7 +808,7 @@ func (s *OLXCategoryService) doMultipartImageUpload(ctx context.Context, listing
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+s.token)
 
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.uploadHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("OLX request nije uspeo: %w", err)
 	}
@@ -760,6 +830,25 @@ func (s *OLXCategoryService) doMultipartImageUpload(ctx context.Context, listing
 	return responseBody, nil
 }
 
+func (s *OLXCategoryService) GetListingLimitsWithRetry(ctx context.Context) (ListingLimitsResponse, error) {
+	var limits ListingLimitsResponse
+	var err error
+	for attempt := 1; attempt <= listingLimitsAttempts; attempt++ {
+		limits, err = s.GetListingLimits(ctx)
+		if err == nil {
+			return limits, nil
+		}
+		if !isRetriableOLXRequestError(err) || attempt == listingLimitsAttempts {
+			return ListingLimitsResponse{}, err
+		}
+		if waitErr := waitForRetry(ctx, attempt); waitErr != nil {
+			return ListingLimitsResponse{}, err
+		}
+		log.Printf("[OLX] listing limits retry attempt=%d/%d error=%v", attempt+1, listingLimitsAttempts, err)
+	}
+	return ListingLimitsResponse{}, err
+}
+
 func (s *OLXCategoryService) streamImagesToMultipart(
 	ctx context.Context,
 	writer *multipart.Writer,
@@ -772,32 +861,12 @@ func (s *OLXCategoryService) streamImagesToMultipart(
 	}
 
 	for index, image := range images {
-		imageURL := strings.TrimSpace(image.URL)
-		if imageURL == "" {
+		imageBytes, sourceContentType, imageSourceLabel, err := s.loadCatalogImageBytes(ctx, image)
+		if err != nil {
+			return closeWithError(err)
+		}
+		if len(imageBytes) == 0 {
 			continue
-		}
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
-		if err != nil {
-			return closeWithError(fmt.Errorf("preuzimanje slike nije uspelo: %w", err))
-		}
-
-		resp, err := s.httpClient.Do(req)
-		if err != nil {
-			return closeWithError(fmt.Errorf("preuzimanje slike nije uspelo: %w", err))
-		}
-
-		if resp.StatusCode >= http.StatusBadRequest {
-			responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			resp.Body.Close()
-			return closeWithError(fmt.Errorf("preuzimanje slike nije uspelo (%d): %s", resp.StatusCode, strings.TrimSpace(string(responseBody))))
-		}
-
-		sourceContentType := resp.Header.Get("Content-Type")
-		imageBytes, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return closeWithError(fmt.Errorf("čitanje slike nije uspelo: %w", err))
 		}
 
 		uploadBytes, uploadContentType, transformed, err := prepareImageForUpload(imageBytes, sourceContentType)
@@ -806,10 +875,10 @@ func (s *OLXCategoryService) streamImagesToMultipart(
 		}
 
 		if transformed {
-			log.Printf("[PUBLISH] image padded with blurred sides source=%s", imageURL)
+			log.Printf("[PUBLISH] image padded with blurred sides source=%s", imageSourceLabel)
 		}
 
-		fileName := imageFileNameFromURL(imageURL, uploadContentType, index)
+		fileName := imageFileName(image, uploadContentType, index)
 		part, err := createImageMultipartPart(writer, "images[]", fileName, uploadContentType)
 		if err != nil {
 			return closeWithError(err)
@@ -825,6 +894,59 @@ func (s *OLXCategoryService) streamImagesToMultipart(
 	}
 
 	return pipeWriter.Close()
+}
+
+func (s *OLXCategoryService) loadCatalogImageBytes(ctx context.Context, image CatalogImage) ([]byte, string, string, error) {
+	imagePath := strings.TrimSpace(image.Path)
+	if imagePath != "" {
+		if imageBytes, contentType, err := loadImageBytesFromPath(imagePath); err == nil {
+			return imageBytes, contentType, imagePath, nil
+		} else if !os.IsNotExist(err) {
+			return nil, "", imagePath, fmt.Errorf("čitanje lokalne slike nije uspelo: %w", err)
+		}
+	}
+
+	imageURL := strings.TrimSpace(image.URL)
+	if imageURL == "" {
+		return nil, "", "", nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return nil, "", imageURL, fmt.Errorf("preuzimanje slike nije uspelo: %w", err)
+	}
+
+	resp, err := s.imageHTTPClient.Do(req)
+	if err != nil {
+		return nil, "", imageURL, fmt.Errorf("preuzimanje slike nije uspelo: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= http.StatusBadRequest {
+		responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, "", imageURL, fmt.Errorf("preuzimanje slike nije uspelo (%d): %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
+	}
+
+	imageBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", imageURL, fmt.Errorf("čitanje slike nije uspelo: %w", err)
+	}
+
+	return imageBytes, resp.Header.Get("Content-Type"), imageURL, nil
+}
+
+func loadImageBytesFromPath(imagePath string) ([]byte, string, error) {
+	imageBytes, err := os.ReadFile(imagePath)
+	if err != nil {
+		return nil, "", err
+	}
+
+	contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(imagePath)))
+	if strings.TrimSpace(contentType) == "" {
+		contentType = http.DetectContentType(imageBytes)
+	}
+
+	return imageBytes, contentType, nil
 }
 
 func createImageMultipartPart(writer *multipart.Writer, fieldName string, fileName string, contentType string) (io.Writer, error) {
@@ -999,6 +1121,23 @@ func imageFileNameFromURL(rawURL string, contentType string, index int) string {
 	return fmt.Sprintf("image-%d.jpg", index)
 }
 
+func imageFileName(image CatalogImage, contentType string, index int) string {
+	imagePath := strings.TrimSpace(image.Path)
+	if imagePath != "" {
+		base := strings.TrimSpace(filepath.Base(imagePath))
+		if base != "" && base != "." && base != string(os.PathSeparator) {
+			if filepath.Ext(base) == "" {
+				if extension := extensionFromContentType(contentType); extension != "" {
+					return base + extension
+				}
+			}
+			return base
+		}
+	}
+
+	return imageFileNameFromURL(image.URL, contentType, index)
+}
+
 func extensionFromContentType(contentType string) string {
 	trimmed := strings.TrimSpace(contentType)
 	if trimmed == "" {
@@ -1037,4 +1176,36 @@ func maxInt(left int, right int) int {
 		return left
 	}
 	return right
+}
+
+func isRetriableOLXRequestError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		if urlErr.Timeout() {
+			return true
+		}
+	}
+
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "timeout") || strings.Contains(message, "deadline exceeded")
+}
+
+func waitForRetry(ctx context.Context, attempt int) error {
+	delay := time.Duration(attempt) * retryBaseDelay
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

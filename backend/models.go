@@ -36,6 +36,7 @@ type CatalogItem struct {
 type CatalogImage struct {
 	Position int    `json:"position"`
 	URL      string `json:"url"`
+	Path     string `json:"path,omitempty"`
 }
 
 type CatalogStatus struct {

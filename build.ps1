@@ -24,6 +24,8 @@ $legacyBackendExePath = Join-Path $backendDir "backend.exe"
 $iconPath = Join-Path $backendDir "icon.png"
 $goWinResPath = Join-Path $env:USERPROFILE "go\bin\go-winres.exe"
 $certPath = Join-Path $rootDir "certs\ICAIcert.pfx"
+$goBuildLdFlags = "-s -w"
+$goBuildArgs = @("build", "-trimpath", "-buildvcs=false", "-ldflags=$goBuildLdFlags", "-o", $appExePath)
 
 $certPassword = "snayrexkrmak2002"
 
@@ -106,8 +108,8 @@ try {
         throw "Windows resource generation failed"
     }
 
-    Log "Building Go executable to app/ICAI.exe"
-    go build -ldflags="-s -w" -o $appExePath
+    Log "Building Go executable to app/ICAI.exe with release flags"
+    & go @goBuildArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Go build failed"
     }

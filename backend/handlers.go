@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 )
@@ -28,7 +29,7 @@ func (a *App) handleCatalogUpload(w http.ResponseWriter, r *http.Request) {
 
 	files := r.MultipartForm.File["files"]
 	if len(files) == 0 {
-		writeError(w, http.StatusBadRequest, "nije poslat nijedan JSON fajl")
+		writeError(w, http.StatusBadRequest, "nije poslat nijedan .json ili .zip fajl")
 		return
 	}
 
@@ -43,6 +44,7 @@ func (a *App) handleCatalogUpload(w http.ResponseWriter, r *http.Request) {
 		}(),
 	})
 
+	skippedDuplicates := make([]string, 0)
 	for _, header := range files {
 		file, err := header.Open()
 		if err != nil {
@@ -53,15 +55,26 @@ func (a *App) handleCatalogUpload(w http.ResponseWriter, r *http.Request) {
 		_, saveErr := a.store.AddCatalog(file, header)
 		_ = file.Close()
 		if saveErr != nil {
+			if errors.Is(saveErr, errCatalogAlreadyUploaded) {
+				skippedDuplicates = append(skippedDuplicates, header.Filename)
+				continue
+			}
 			writeError(w, http.StatusBadRequest, saveErr.Error())
 			return
 		}
 	}
 
 	state := a.store.State()
+	if len(skippedDuplicates) > 0 {
+		logEvent("catalog", "duplicate upload skipped", map[string]any{
+			"duplicate_count": len(skippedDuplicates),
+			"files":           skippedDuplicates,
+		})
+	}
 	logEvent("catalog", "upload completed", map[string]any{
-		"files_total": state.TotalFiles,
-		"items_total": state.TotalItems,
+		"files_total":         state.TotalFiles,
+		"items_total":         state.TotalItems,
+		"skipped_duplicates":  len(skippedDuplicates),
 	})
 	writeJSON(w, http.StatusCreated, a.store.State())
 }

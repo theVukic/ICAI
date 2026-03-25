@@ -59,6 +59,11 @@ func NewApp() (*App, error) {
 		return nil, errors.New("dist folder nije pronađen: " + distDir)
 	}
 
+	storagePaths, err := initializeAppStorage(workDir, projectDir, exeDir)
+	if err != nil {
+		return nil, err
+	}
+
 	store, err := NewCatalogStore()
 	if err != nil {
 		return nil, err
@@ -68,8 +73,15 @@ func NewApp() (*App, error) {
 		store:          store,
 		distDir:        distDir,
 		runtimeURLPath: filepath.Join(os.TempDir(), "icai-app-runtime-url.txt"),
-		descriptionDir: resolveDescriptionDir([]string{filepath.Join(workDir, "description"), filepath.Join(projectDir, "description"), filepath.Join(exeDir, "description")}),
+		descriptionDir: resolveDescriptionDir([]string{
+			storagePaths.DescriptionDir,
+			filepath.Join(workDir, "description"),
+			filepath.Join(projectDir, "description"),
+			filepath.Join(exeDir, "description"),
+		}),
 		olxCategories: NewOLXCategoryService([]string{
+			storagePaths.BackendDir,
+			storagePaths.RootDir,
 			exeDir,
 			filepath.Join(exeDir, "backend"),
 			projectDir,
@@ -78,6 +90,8 @@ func NewApp() (*App, error) {
 			filepath.Join(workDir, "backend"),
 		}),
 		auth: NewAuthManager([]string{
+			storagePaths.BackendDir,
+			storagePaths.RootDir,
 			filepath.Join(exeDir, "backend"),
 			exeDir,
 			filepath.Join(projectDir, "backend"),
@@ -88,6 +102,8 @@ func NewApp() (*App, error) {
 	}
 
 	logEvent("startup", "application paths resolved", map[string]any{
+		"app_data_root":   storagePaths.RootDir,
+		"app_backend_dir": storagePaths.BackendDir,
 		"dist_dir":        distDir,
 		"description_dir": app.descriptionDir,
 		"runtime_url":     app.runtimeURLPath,

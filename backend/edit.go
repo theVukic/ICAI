@@ -366,7 +366,7 @@ func (s *CatalogStore) DeleteItemsBulk(towKods []string) error {
 		}
 
 		if len(filteredItems) == 0 {
-			if err := os.Remove(catalog.SavedPath); err != nil && !os.IsNotExist(err) {
+			if err := s.removeCatalogFiles(catalog); err != nil && !os.IsNotExist(err) {
 				return fmt.Errorf("nije moguće obrisati temp fajl: %w", err)
 			}
 			logEvent("file", "catalog temp file removed", map[string]any{

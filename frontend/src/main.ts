@@ -710,7 +710,7 @@ function render(): void {
 
       <main class="main-layout ${hasItems ? "has-items" : "is-empty"}">
         <section class="drop-layer ${state.isDragging ? "dragging" : ""}" id="dropZone">
-        <input id="fileInput" type="file" accept=".json,application/json" multiple hidden />
+        <input id="fileInput" type="file" accept=".json,.zip,application/json,application/zip" multiple hidden />
 
         ${
           hasItems
@@ -1693,33 +1693,39 @@ async function uploadFiles(files: File[]): Promise<void> {
     },
   });
   state.isPickingFiles = false;
-  const jsonFiles = files.filter((file) =>
-    file.name.toLowerCase().endsWith(".json"),
-  );
-  if (jsonFiles.length === 0) {
+  const uploadableFiles = files.filter((file) => {
+    const lowerName = file.name.toLowerCase();
+    return lowerName.endsWith(".json") || lowerName.endsWith(".zip");
+  });
+  if (uploadableFiles.length === 0) {
     logClientEvent({
       category: "file",
       level: "warn",
-      message: "no json files selected",
+      message: "no uploadable files selected",
       details: {
         fileCount: files.length,
       },
     });
-    state.message = "Izaberi barem jedan .json fajl.";
+    state.message = "Izaberi barem jedan .json ili .zip fajl.";
     state.messageTone = "danger";
     render();
     return;
   }
 
+  const zipFiles = uploadableFiles.filter((file) =>
+    file.name.toLowerCase().endsWith(".zip"),
+  );
+
   state.isUploading = true;
   suspendMainRefresh(3000);
-  state.message = "Ucitavam artikle...";
+  state.message =
+    zipFiles.length > 0 ? "Ucitavam katalog i raspakujem slike..." : "Ucitavam artikle...";
   state.messageTone = "muted";
   render();
 
   try {
     const formData = new FormData();
-    for (const file of jsonFiles) {
+    for (const file of uploadableFiles) {
       formData.append("files", file);
     }
 
@@ -1750,7 +1756,7 @@ async function uploadFiles(files: File[]): Promise<void> {
       message: "files uploaded successfully",
       details: {
         itemCount: state.data.totalItems,
-        uploadedFiles: jsonFiles.map((file) => file.name),
+        uploadedFiles: uploadableFiles.map((file) => file.name),
       },
     });
     window.setTimeout(() => {
@@ -1764,7 +1770,7 @@ async function uploadFiles(files: File[]): Promise<void> {
       message: "file upload failed",
       details: {
         error: error instanceof Error ? error.message : "Upload nije uspeo.",
-        uploadedFiles: jsonFiles.map((file) => file.name),
+        uploadedFiles: uploadableFiles.map((file) => file.name),
       },
     });
     state.message =

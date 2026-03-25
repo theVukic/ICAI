@@ -18,18 +18,20 @@ import (
 const olxBaseURL = "https://api.olx.ba"
 
 type OLXCategoryService struct {
-	httpClient *http.Client
-	token      string
-	tokenName  string
-	tokenPath  string
-	tokens     []namedTokenFile
-	me         SessionInfoResponse
+	httpClient       *http.Client
+	imageHTTPClient  *http.Client
+	uploadHTTPClient *http.Client
+	token            string
+	tokenName        string
+	tokenPath        string
+	tokens           []namedTokenFile
+	me               SessionInfoResponse
 }
 
 type tokenFilePayload struct {
-	Name       string           `json:"name"`
-	Token      string           `json:"token"`
-	ActiveName string           `json:"activeName"`
+	Name       string           `json:"name,omitempty"`
+	Token      string           `json:"token,omitempty"`
+	ActiveName string           `json:"activeName,omitempty"`
 	Tokens     []namedTokenFile `json:"tokens"`
 }
 
@@ -65,11 +67,13 @@ func NewOLXCategoryService(searchRoots []string) *OLXCategoryService {
 		"token_preview":    maskSecret(token),
 	})
 	return &OLXCategoryService{
-		httpClient: &http.Client{Timeout: 12 * time.Second},
-		token:      token,
-		tokenName:  tokenName,
-		tokenPath:  tokenPath,
-		tokens:     tokens,
+		httpClient:       &http.Client{Timeout: 12 * time.Second},
+		imageHTTPClient:  &http.Client{Timeout: 30 * time.Second},
+		uploadHTTPClient: &http.Client{Timeout: 45 * time.Second},
+		token:            token,
+		tokenName:        tokenName,
+		tokenPath:        tokenPath,
+		tokens:           tokens,
 	}
 }
 
@@ -159,19 +163,23 @@ func (s *OLXCategoryService) SwitchActiveProfile(ctx context.Context, name strin
 		return fmt.Errorf("trazeni OLX token nije pronadjen")
 	}
 
-	payload.ActiveName = strings.TrimSpace(selected.Name)
-	updated, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return fmt.Errorf("ne mogu upisati token.json")
+	reordered := make([]namedTokenFile, 0, len(payload.Tokens))
+	reordered = append(reordered, *selected)
+	for _, entry := range payload.Tokens {
+		if strings.EqualFold(strings.TrimSpace(entry.Name), strings.TrimSpace(selected.Name)) {
+			continue
+		}
+		reordered = append(reordered, entry)
 	}
-	updated = append(updated, '\n')
-	if err := os.WriteFile(s.tokenPath, updated, 0o600); err != nil {
+
+	payload.Tokens = reordered
+	if err := saveOLXTokenConfig(s.tokenPath, payload.Tokens); err != nil {
 		return fmt.Errorf("ne mogu sacuvati token.json: %w", err)
 	}
 
 	s.tokenName = strings.TrimSpace(selected.Name)
 	s.token = strings.TrimPrefix(strings.TrimSpace(selected.Token), "Bearer ")
-	s.tokens = payload.Tokens
+	s.tokens = reordered
 	s.me = SessionInfoResponse{}
 
 	loadCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
@@ -389,28 +397,26 @@ func loadOLXTokenConfig(searchRoots []string) (string, string, string, []namedTo
 			payload.Tokens = entries
 		}
 
-		if token := strings.TrimSpace(payload.Token); token != "" {
-			return tokenPath, strings.TrimSpace(payload.Name), strings.TrimPrefix(token, "Bearer "), payload.Tokens
-		}
-
 		if len(payload.Tokens) == 0 {
+			if token := strings.TrimSpace(payload.Token); token != "" {
+				return tokenPath, strings.TrimSpace(payload.Name), strings.TrimPrefix(token, "Bearer "), payload.Tokens
+			}
 			continue
 		}
 
+		entries := payload.Tokens
 		if activeName := strings.TrimSpace(payload.ActiveName); activeName != "" {
-			for _, entry := range payload.Tokens {
+			for i, entry := range payload.Tokens {
 				if !strings.EqualFold(strings.TrimSpace(entry.Name), activeName) {
 					continue
 				}
 
-				token := strings.TrimSpace(entry.Token)
-				if token != "" {
-					return tokenPath, strings.TrimSpace(entry.Name), strings.TrimPrefix(token, "Bearer "), payload.Tokens
-				}
+				entries = append([]namedTokenFile{entry}, append(payload.Tokens[:i:i], payload.Tokens[i+1:]...)...)
+				break
 			}
 		}
 
-		for _, entry := range payload.Tokens {
+		for _, entry := range entries {
 			token := strings.TrimSpace(entry.Token)
 			if token == "" {
 				continue
@@ -420,6 +426,24 @@ func loadOLXTokenConfig(searchRoots []string) (string, string, string, []namedTo
 	}
 
 	return "", "", "", []namedTokenFile{}
+}
+
+func saveOLXTokenConfig(tokenPath string, tokens []namedTokenFile) error {
+	payload := tokenFilePayload{
+		Tokens: tokens,
+	}
+
+	updated, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("ne mogu upisati token.json")
+	}
+
+	updated = append(updated, '\n')
+	if err := os.WriteFile(tokenPath, updated, 0o600); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func firstNonEmpty(values ...string) string {
