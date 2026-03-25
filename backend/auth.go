@@ -94,6 +94,11 @@ func NewAuthManager(searchRoots []string) *AuthManager {
 	}
 
 	manager.loadPersistedSessions()
+	logEvent("auth", "auth manager initialized", map[string]any{
+		"pepper_path":          manager.pepperPath,
+		"session_storage_path": manager.sessionsPath,
+		"legacy_storage_path":  manager.legacySessionsPath,
+	})
 
 	return manager
 }
@@ -139,6 +144,9 @@ func (m *AuthManager) loadPepper() (string, error) {
 }
 
 func (m *AuthManager) fetchRemoteUsers(ctx context.Context) ([]remoteLoginUser, error) {
+	logEvent("auth", "fetching remote users", map[string]any{
+		"url": loginConfigURL,
+	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, loginConfigURL, nil)
 	if err != nil {
 		return nil, err
@@ -159,6 +167,9 @@ func (m *AuthManager) fetchRemoteUsers(ctx context.Context) ([]remoteLoginUser, 
 		return nil, fmt.Errorf("login.json nije validan JSON: %w", err)
 	}
 
+	logEvent("auth", "remote users fetched", map[string]any{
+		"user_count": len(payload.Users),
+	})
 	return payload.Users, nil
 }
 
@@ -176,6 +187,9 @@ func (m *AuthManager) VerifyLogin(ctx context.Context, username, password string
 	lookupHash := makeUsernameLookupHash(username, pepper)
 	user, found := findUserByLookupHash(users, lookupHash)
 	if !found {
+		logEvent("auth", "username lookup miss", map[string]any{
+			"username": username,
+		})
 		return remoteLoginUser{}, errors.New("pogresan username ili password")
 	}
 
@@ -249,6 +263,12 @@ func (m *AuthManager) CreateSession(username string, user remoteLoginUser, remem
 	}
 	m.mu.Unlock()
 
+	logEvent("auth", "session created", map[string]any{
+		"expires_at":  session.ExpiresAt.Format(time.RFC3339),
+		"remember_me": session.RememberMe,
+		"session":     maskSecret(session.Token),
+		"username":    session.Username,
+	})
 	return session, nil
 }
 
@@ -304,6 +324,14 @@ func (m *AuthManager) DeleteSession(token string) {
 		_ = m.persistRememberedSessionsLocked()
 	}
 	m.mu.Unlock()
+
+	if existed {
+		logEvent("auth", "session deleted", map[string]any{
+			"remember_me": shouldPersist,
+			"session":     maskSecret(token),
+			"username":    session.Username,
+		})
+	}
 }
 
 func (m *AuthManager) DeleteSessionFromRequest(r *http.Request) {
@@ -504,6 +532,7 @@ func (m *AuthManager) loadPersistedSessions() {
 	}
 
 	now := time.Now().UTC()
+	loadedCount := 0
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -518,9 +547,14 @@ func (m *AuthManager) loadPersistedSessions() {
 		}
 
 		m.sessions[session.Token] = session
+		loadedCount++
 	}
 
 	_ = m.persistRememberedSessionsLocked()
+	logEvent("auth", "persisted sessions loaded", map[string]any{
+		"count": loadedCount,
+		"path":  sessionPath,
+	})
 
 	if sessionPath != m.sessionsPath && strings.TrimSpace(m.sessionsPath) != "" {
 		_ = os.Remove(sessionPath)
@@ -550,6 +584,9 @@ func (m *AuthManager) persistRememberedSessionsLocked() error {
 		if err := os.Remove(m.sessionsPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("ne mogu obrisati session storage: %w", err)
 		}
+		logEvent("auth", "remembered sessions storage cleared", map[string]any{
+			"path": m.sessionsPath,
+		})
 		return nil
 	}
 
@@ -572,6 +609,10 @@ func (m *AuthManager) persistRememberedSessionsLocked() error {
 		return fmt.Errorf("ne mogu zamijeniti storage remembered sessiona: %w", err)
 	}
 
+	logEvent("auth", "remembered sessions persisted", map[string]any{
+		"count": len(persisted),
+		"path":  m.sessionsPath,
+	})
 	return nil
 }
 

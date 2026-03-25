@@ -38,6 +38,12 @@ type App struct {
 	auth           *AuthManager
 }
 
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
 func NewApp() (*App, error) {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -81,11 +87,27 @@ func NewApp() (*App, error) {
 		}),
 	}
 
+	logEvent("startup", "application paths resolved", map[string]any{
+		"dist_dir":        distDir,
+		"description_dir": app.descriptionDir,
+		"runtime_url":     app.runtimeURLPath,
+		"work_dir":        workDir,
+	})
+
+	if app.olxCategories != nil {
+		logEvent("startup", "olx token configuration loaded", map[string]any{
+			"active_profile":     app.olxCategories.ActiveProfileName(),
+			"available_profiles": app.olxCategories.AvailableProfiles(),
+			"token_configured":   app.olxCategories.HasToken(),
+			"token_preview":      maskSecret(app.olxCategories.token),
+		})
+	}
+
 	mux := http.NewServeMux()
 	app.registerRoutes(mux)
 
 	app.server = &http.Server{
-		Handler: mux,
+		Handler: app.withHTTPLogging(mux),
 	}
 
 	return app, nil
@@ -100,6 +122,9 @@ func (a *App) Run() error {
 
 	if err := a.acquireSingleInstanceLock(); err != nil {
 		existingURL := a.readRuntimeURL()
+		logEvent("startup", "single instance already running", map[string]any{
+			"existing_url": existingURL,
+		})
 		if existingURL != "" {
 			openBrowser(existingURL)
 		}
@@ -131,6 +156,11 @@ func (a *App) Run() error {
 		} else {
 			session := a.olxCategories.SessionInfo()
 			log.Printf("Prijavljen si kao %s", session.Username)
+			logEvent("startup", "olx session loaded", map[string]any{
+				"profile_name": session.ProfileName,
+				"username":     session.Username,
+				"full_name":    session.FullName,
+			})
 		}
 	}
 
@@ -147,6 +177,7 @@ func (a *App) Run() error {
 
 func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/test", a.handleHealth)
+	mux.HandleFunc("/api/logs/event", a.handleClientLogEvent)
 
 	protectedAPI := http.NewServeMux()
 
@@ -205,6 +236,71 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 
 		http.ServeFile(w, r, filepath.Join(a.distDir, "index.html"))
 	})
+}
+
+func (w *loggingResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *loggingResponseWriter) Write(body []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	written, err := w.ResponseWriter.Write(body)
+	w.bytes += written
+	return written, err
+}
+
+func (a *App) withHTTPLogging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startedAt := time.Now()
+		recorder := &loggingResponseWriter{ResponseWriter: w, status: http.StatusOK}
+
+		authenticated := false
+		appUsername := ""
+		if a.auth != nil {
+			if session, ok := a.auth.SessionFromRequest(r); ok {
+				authenticated = true
+				appUsername = session.Username
+			}
+		}
+
+		next.ServeHTTP(recorder, r)
+
+		if shouldSkipRoutineHTTPLog(r.URL.Path, r.Method, recorder.status) {
+			return
+		}
+
+		logEvent("http", "request completed", map[string]any{
+			"app_username":  appUsername,
+			"authenticated": authenticated,
+			"bytes":         recorder.bytes,
+			"duration_ms":   time.Since(startedAt).Milliseconds(),
+			"method":        r.Method,
+			"path":          r.URL.Path,
+			"query":         r.URL.RawQuery,
+			"remote_addr":   requestClientIP(r),
+			"status":        recorder.status,
+			"user_agent":    r.UserAgent(),
+		})
+	})
+}
+
+func shouldSkipRoutineHTTPLog(path string, method string, status int) bool {
+	if status >= http.StatusBadRequest {
+		return false
+	}
+
+	if method == http.MethodPost && path == "/api/logs/event" {
+		return true
+	}
+
+	if method == http.MethodGet && path == "/api/session" {
+		return true
+	}
+
+	return false
 }
 
 func (a *App) waitForShutdown() {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 )
 
 func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -24,6 +25,11 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.Username = strings.TrimSpace(req.Username)
+	logEvent("auth", "login attempt", map[string]any{
+		"remember_me": req.RememberMe,
+		"remote_addr": requestClientIP(r),
+		"username":    req.Username,
+	})
 	if req.Username == "" || strings.TrimSpace(req.Password) == "" {
 		writeError(w, http.StatusBadRequest, "username i password su obavezni")
 		return
@@ -31,6 +37,11 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	user, err := a.auth.VerifyLogin(r.Context(), req.Username, req.Password)
 	if err != nil {
+		logEvent("auth", "login failed", map[string]any{
+			"remote_addr": requestClientIP(r),
+			"username":    req.Username,
+			"error":       err.Error(),
+		})
 		a.auth.ClearSessionCookie(w)
 		writeJSON(w, http.StatusUnauthorized, LoginResponse{
 			Authenticated: false,
@@ -45,6 +56,13 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logEvent("auth", "login success", map[string]any{
+		"expires_at":  session.ExpiresAt.Format(time.RFC3339),
+		"remember_me": session.RememberMe,
+		"role":        session.Role,
+		"session":     maskSecret(session.Token),
+		"username":    session.Username,
+	})
 	a.auth.WriteSessionCookie(w, session)
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Authenticated: true,
@@ -61,6 +79,12 @@ func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if a.auth != nil {
+		if session, ok := a.auth.SessionFromRequest(r); ok {
+			logEvent("auth", "logout", map[string]any{
+				"session":  maskSecret(session.Token),
+				"username": session.Username,
+			})
+		}
 		a.auth.DeleteSessionFromRequest(r)
 		a.auth.ClearSessionCookie(w)
 	}
@@ -76,6 +100,10 @@ func (a *App) requireAuthentication(next http.Handler) http.Handler {
 		}
 
 		if _, ok := a.auth.SessionFromRequest(r); !ok {
+			logEvent("auth", "unauthorized request blocked", map[string]any{
+				"path":        r.URL.Path,
+				"remote_addr": requestClientIP(r),
+			})
 			a.auth.ClearSessionCookie(w)
 			writeError(w, http.StatusUnauthorized, "Morate se prijaviti da biste pristupili aplikaciji.")
 			return

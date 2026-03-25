@@ -48,6 +48,10 @@ func (a *App) handleCatalogItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		logEvent("catalog", "single item updated", map[string]any{
+			"price":   item.RetailPrice,
+			"tow_kod": towKod,
+		})
 		writeJSON(w, http.StatusOK, item)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -72,6 +76,10 @@ func (a *App) handleCatalogBulkEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logEvent("catalog", "bulk edit completed", map[string]any{
+		"item_count": len(items),
+		"tow_kods":   req.TowKods,
+	})
 	writeJSON(w, http.StatusOK, items)
 }
 
@@ -92,6 +100,9 @@ func (a *App) handleCatalogBulkDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logEvent("catalog", "bulk delete completed", map[string]any{
+		"tow_kods": req.TowKods,
+	})
 	writeJSON(w, http.StatusOK, a.store.State())
 }
 
@@ -217,6 +228,12 @@ func (s *CatalogStore) writeCatalogFile(catalog UploadedCatalog) error {
 		return fmt.Errorf("nije moguće upisati temp fajl: %w", err)
 	}
 
+	logEvent("file", "catalog temp file updated", map[string]any{
+		"catalog_id":  catalog.ID,
+		"path":        catalog.SavedPath,
+		"size_bytes":  len(output),
+		"source_file": catalog.FileName,
+	})
 	return nil
 }
 
@@ -352,6 +369,11 @@ func (s *CatalogStore) DeleteItemsBulk(towKods []string) error {
 			if err := os.Remove(catalog.SavedPath); err != nil && !os.IsNotExist(err) {
 				return fmt.Errorf("nije moguće obrisati temp fajl: %w", err)
 			}
+			logEvent("file", "catalog temp file removed", map[string]any{
+				"catalog_id":  catalog.ID,
+				"path":        catalog.SavedPath,
+				"source_file": catalog.FileName,
+			})
 			continue
 		}
 
@@ -368,5 +390,8 @@ func (s *CatalogStore) DeleteItemsBulk(towKods []string) error {
 	}
 
 	s.catalogs = nextCatalogs
+	logEvent("catalog", "items deleted from store", map[string]any{
+		"deleted_count": deletedCount,
+	})
 	return nil
 }

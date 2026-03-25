@@ -19,6 +19,7 @@ import {
 } from "./session";
 import { mountPageTransition, navigateWithFade } from "./transition";
 import { renderAppBrand } from "./branding";
+import { installGlobalClientLogging, logClientEvent } from "./logger";
 
 type CatalogImage = {
   position: number;
@@ -110,7 +111,7 @@ const SELECTION_MODE_STORAGE_KEY = "icaiapp:selection-mode";
 const SELECT_ALL_STORAGE_KEY = "icaiapp:select-all";
 const SELECTED_TOWKODS_STORAGE_KEY = "icaiapp:selected-towkods";
 const MAIN_SCROLL_TOP_STORAGE_KEY = "icaiapp:main-scroll-top";
-const AUTH_POLL_INTERVAL_MS = 20000;
+const AUTH_POLL_INTERVAL_MS = 600000;
 
 type SortMode = "price-asc" | "price-desc" | "name" | "brand" | "publish-ready";
 
@@ -129,6 +130,7 @@ if (!app) {
 }
 
 const root = app;
+installGlobalClientLogging();
 mountPageTransition(root);
 let authPollTimer: number | null = null;
 
@@ -1430,6 +1432,14 @@ async function refreshAuthentication(force = false): Promise<void> {
     state.olxProfileName = session.profileName || "";
     state.olxAvailableTokens = session.availableTokens || [];
   } catch {
+    logClientEvent({
+      category: "auth",
+      level: "warn",
+      message: "refresh authentication failed",
+      details: {
+        force,
+      },
+    });
     state.isAuthenticated = false;
     state.sessionUsername = "";
     state.tokenConfigured = false;
@@ -1446,7 +1456,12 @@ function startAuthPolling(): void {
   stopAuthPolling();
 
   authPollTimer = window.setInterval(() => {
-    if (!state.isAuthenticated || state.authChecking || state.authSubmitting) {
+    if (
+      !state.isAuthenticated ||
+      state.authChecking ||
+      state.authSubmitting ||
+      shouldPauseAuthPollingForCurrentPath()
+    ) {
       return;
     }
 
@@ -1456,7 +1471,9 @@ function startAuthPolling(): void {
         return;
       }
 
-      render();
+      if (isMainPath()) {
+        render();
+      }
     });
   }, AUTH_POLL_INTERVAL_MS);
 }
@@ -1500,6 +1517,14 @@ function resetProtectedState(): void {
 }
 
 async function forceLogoutToLogin(message = ""): Promise<void> {
+  logClientEvent({
+    category: "auth",
+    level: "warn",
+    message: "forcing logout to login screen",
+    details: {
+      message,
+    },
+  });
   stopAuthPolling();
 
   try {
@@ -1521,6 +1546,14 @@ async function forceLogoutToLogin(message = ""): Promise<void> {
 }
 
 async function startApplication(): Promise<void> {
+  logClientEvent({
+    category: "app",
+    message: "application start requested",
+    details: {
+      authenticated: state.isAuthenticated,
+      path: window.location.pathname,
+    },
+  });
   state.authSubmitting = false;
   state.authChecking = false;
 
@@ -1544,6 +1577,14 @@ async function startApplication(): Promise<void> {
   }
 
   await loadState();
+  logClientEvent({
+    category: "app",
+    message: "application started",
+    details: {
+      items: state.data.totalItems,
+      path: window.location.pathname,
+    },
+  });
 }
 
 async function refreshListingLimits(): Promise<void> {
@@ -1594,11 +1635,7 @@ function isPublishBlocked(): boolean {
 
 function refreshMainPageFromStore(): void {
   if (
-    isDescriptionPath() ||
-    isBulkCategoryPath() ||
-    isBulkEditPath() ||
-    Boolean(getEditTowKodFromPath()) ||
-    Boolean(getCategoryTowKodFromPath()) ||
+    shouldPauseAuthPollingForCurrentPath() ||
     state.isPublishing ||
     state.isUploading ||
     state.isPickingFiles ||
@@ -1647,11 +1684,27 @@ function isMainRefreshSuspended(): boolean {
 }
 
 async function uploadFiles(files: File[]): Promise<void> {
+  logClientEvent({
+    category: "file",
+    message: "file picker returned files",
+    details: {
+      fileCount: files.length,
+      files: files.map((file) => file.name),
+    },
+  });
   state.isPickingFiles = false;
   const jsonFiles = files.filter((file) =>
     file.name.toLowerCase().endsWith(".json"),
   );
   if (jsonFiles.length === 0) {
+    logClientEvent({
+      category: "file",
+      level: "warn",
+      message: "no json files selected",
+      details: {
+        fileCount: files.length,
+      },
+    });
     state.message = "Izaberi barem jedan .json fajl.";
     state.messageTone = "danger";
     render();
@@ -1692,11 +1745,28 @@ async function uploadFiles(files: File[]): Promise<void> {
     state.animateItemsIn = true;
     state.message = "Artikli su dodati.";
     state.messageTone = "success";
+    logClientEvent({
+      category: "file",
+      message: "files uploaded successfully",
+      details: {
+        itemCount: state.data.totalItems,
+        uploadedFiles: jsonFiles.map((file) => file.name),
+      },
+    });
     window.setTimeout(() => {
       state.animateItemsIn = false;
       render();
     }, 220);
   } catch (error) {
+    logClientEvent({
+      category: "file",
+      level: "error",
+      message: "file upload failed",
+      details: {
+        error: error instanceof Error ? error.message : "Upload nije uspeo.",
+        uploadedFiles: jsonFiles.map((file) => file.name),
+      },
+    });
     state.message =
       error instanceof Error ? error.message : "Upload nije uspeo.";
     state.messageTone = "danger";
@@ -2043,7 +2113,25 @@ function isMainPath(): boolean {
   return window.location.pathname === "/";
 }
 
+function shouldPauseAuthPollingForCurrentPath(): boolean {
+  return (
+    isDescriptionPath() ||
+    isBulkCategoryPath() ||
+    isBulkEditPath() ||
+    Boolean(getEditTowKodFromPath()) ||
+    Boolean(getCategoryTowKodFromPath())
+  );
+}
+
 window.addEventListener("popstate", () => {
+  logClientEvent({
+    category: "navigation",
+    message: "popstate handled",
+    details: {
+      authenticated: state.isAuthenticated,
+      path: window.location.pathname,
+    },
+  });
   if (!state.isAuthenticated) {
     render();
     return;
@@ -2066,6 +2154,13 @@ window.addEventListener("popstate", () => {
 });
 
 window.addEventListener("pageshow", () => {
+  logClientEvent({
+    category: "window",
+    message: "pageshow",
+    details: {
+      path: window.location.pathname,
+    },
+  });
   if (state.isPickingFiles) {
     window.setTimeout(() => {
       state.isPickingFiles = false;
@@ -2081,6 +2176,14 @@ window.addEventListener("pageshow", () => {
 });
 
 window.addEventListener("focus", () => {
+  logClientEvent({
+    category: "window",
+    message: "window focus",
+    details: {
+      authenticated: state.isAuthenticated,
+      path: window.location.pathname,
+    },
+  });
   if (!state.isAuthenticated) {
     void refreshAuthentication(true).then(() => {
       render();

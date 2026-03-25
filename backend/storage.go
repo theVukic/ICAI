@@ -26,11 +26,17 @@ func NewCatalogStore() (*CatalogStore, error) {
 		return nil, fmt.Errorf("nije moguće kreirati temp folder: %w", err)
 	}
 
-	return &CatalogStore{
+	store := &CatalogStore{
 		tempDir:         tempDir,
 		catalogs:        []UploadedCatalog{},
 		categorizations: map[string]ItemCategorySelection{},
-	}, nil
+	}
+
+	logEvent("catalog", "catalog store initialized", map[string]any{
+		"temp_dir": tempDir,
+	})
+
+	return store, nil
 }
 
 func (s *CatalogStore) TempDir() string {
@@ -131,6 +137,12 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 	}
 
 	s.catalogs = append(s.catalogs, catalog)
+	logEvent("file", "catalog file saved", map[string]any{
+		"catalog_id":  catalog.ID,
+		"item_count":  catalog.TotalItems,
+		"path":        savedPath,
+		"source_file": header.Filename,
+	})
 	return catalog, nil
 }
 
@@ -160,6 +172,9 @@ func (s *CatalogStore) Clear() error {
 
 	s.catalogs = []UploadedCatalog{}
 	s.categorizations = map[string]ItemCategorySelection{}
+	logEvent("catalog", "catalog store cleared", map[string]any{
+		"temp_dir": s.tempDir,
+	})
 	return nil
 }
 
@@ -188,6 +203,11 @@ func (s *CatalogStore) SaveCategorization(towKod string, selection ItemCategoryS
 
 			itemCopy := catalog.Items[itemIndex]
 			itemCopy.Categorization = &copied
+			logEvent("category", "single item categorization persisted", map[string]any{
+				"catalog_id":  catalog.ID,
+				"category_id": selection.Category.ID,
+				"tow_kod":     towKod,
+			})
 			return itemCopy, nil
 		}
 	}
@@ -249,12 +269,19 @@ func (s *CatalogStore) SaveCategorizationBulk(towKods []string, selection ItemCa
 		}
 	}
 
+	logEvent("category", "bulk categorization persisted", map[string]any{
+		"category_id": selection.Category.ID,
+		"item_count":  len(updatedItems),
+	})
 	return updatedItems, nil
 }
 
 func (s *CatalogStore) Cleanup() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	logEvent("catalog", "catalog store cleanup", map[string]any{
+		"temp_dir": s.tempDir,
+	})
 	return os.RemoveAll(s.tempDir)
 }
 

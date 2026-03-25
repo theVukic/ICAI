@@ -40,6 +40,13 @@ func (a *App) handleListingLimits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logEvent("olx", "listing limits loaded", map[string]any{
+		"remaining":        limits.Remaining,
+		"token_configured": limits.TokenConfigured,
+		"total_limit":      limits.TotalLimit,
+		"total_listings":   limits.TotalListings,
+		"unlimited":        limits.Unlimited,
+	})
 	writeJSON(w, http.StatusOK, limits)
 }
 

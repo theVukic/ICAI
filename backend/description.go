@@ -38,6 +38,10 @@ func (a *App) handleDescription(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		logEvent("description", "description document saved", map[string]any{
+			"content_length": len(document.Content),
+			"profile_name":   document.ProfileName,
+		})
 		writeJSON(w, http.StatusOK, document)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -73,6 +77,10 @@ func (a *App) handleDescriptionRender(w http.ResponseWriter, r *http.Request) {
 		TowKod:      towKod,
 		Content:     renderDescriptionTemplate(document.Content, item),
 	})
+	logEvent("description", "description rendered", map[string]any{
+		"profile_name": document.ProfileName,
+		"tow_kod":      towKod,
+	})
 }
 
 func (a *App) loadDescriptionDocument() (DescriptionDocument, error) {
@@ -82,6 +90,10 @@ func (a *App) loadDescriptionDocument() (DescriptionDocument, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			logEvent("description", "description file missing, using empty document", map[string]any{
+				"path":         path,
+				"profile_name": profileName,
+			})
 			return DescriptionDocument{
 				ProfileName: profileName,
 				Content:     "",
@@ -97,6 +109,10 @@ func (a *App) loadDescriptionDocument() (DescriptionDocument, error) {
 	}
 
 	document.ProfileName = profileName
+	logEvent("description", "description document loaded", map[string]any{
+		"path":         path,
+		"profile_name": profileName,
+	})
 	return document, nil
 }
 
@@ -123,6 +139,11 @@ func (a *App) saveDescriptionDocument(req DescriptionSaveRequest) (DescriptionDo
 		return DescriptionDocument{}, fmt.Errorf("nije moguće sačuvati description JSON: %w", err)
 	}
 
+	logEvent("file", "description file written", map[string]any{
+		"path":         a.descriptionDocumentPath(profileName),
+		"profile_name": profileName,
+		"size_bytes":   len(output),
+	})
 	return document, nil
 }
 

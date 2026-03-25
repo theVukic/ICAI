@@ -51,6 +51,19 @@ type olxMeResponse struct {
 
 func NewOLXCategoryService(searchRoots []string) *OLXCategoryService {
 	tokenPath, tokenName, token, tokens := loadOLXTokenConfig(searchRoots)
+	logEvent("olx", "token config discovered", map[string]any{
+		"active_profile": tokenName,
+		"available_profiles": func() []string {
+			names := make([]string, 0, len(tokens))
+			for _, entry := range tokens {
+				names = append(names, entry.Name)
+			}
+			return names
+		}(),
+		"token_configured": strings.TrimSpace(token) != "",
+		"token_path":       tokenPath,
+		"token_preview":    maskSecret(token),
+	})
 	return &OLXCategoryService{
 		httpClient: &http.Client{Timeout: 12 * time.Second},
 		token:      token,
@@ -111,6 +124,9 @@ func (s *OLXCategoryService) AvailableProfiles() []string {
 
 func (s *OLXCategoryService) SwitchActiveProfile(ctx context.Context, name string) error {
 	name = strings.TrimSpace(name)
+	logEvent("olx", "switch active profile requested", map[string]any{
+		"requested_profile": name,
+	})
 	if name == "" {
 		return fmt.Errorf("naziv tokena je obavezan")
 	}
@@ -164,6 +180,12 @@ func (s *OLXCategoryService) SwitchActiveProfile(ctx context.Context, name strin
 		return err
 	}
 
+	logEvent("olx", "active profile switched", map[string]any{
+		"active_profile":     s.tokenName,
+		"available_profiles": s.AvailableProfiles(),
+		"token_preview":      maskSecret(s.token),
+	})
+
 	return nil
 }
 
@@ -185,6 +207,10 @@ func (s *OLXCategoryService) LoadMe(ctx context.Context) error {
 	if !s.HasToken() {
 		return nil
 	}
+
+	logEvent("olx", "loading profile info", map[string]any{
+		"active_profile": s.ActiveProfileName(),
+	})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, olxBaseURL+"/me", nil)
 	if err != nil {
@@ -218,6 +244,11 @@ func (s *OLXCategoryService) LoadMe(ctx context.Context) error {
 			FullName:        strings.TrimSpace(direct.FirstName + " " + direct.LastName),
 			ProfileName:     firstNonEmpty(strings.TrimSpace(s.tokenName), strings.TrimSpace(direct.Username), "default"),
 		}
+		logEvent("olx", "profile info loaded", map[string]any{
+			"active_profile": s.ActiveProfileName(),
+			"username":       s.me.Username,
+			"full_name":      s.me.FullName,
+		})
 		return nil
 	}
 
@@ -229,6 +260,11 @@ func (s *OLXCategoryService) LoadMe(ctx context.Context) error {
 			FullName:        strings.TrimSpace(wrapped.Data.FirstName + " " + wrapped.Data.LastName),
 			ProfileName:     firstNonEmpty(strings.TrimSpace(s.tokenName), strings.TrimSpace(wrapped.Data.Username), "default"),
 		}
+		logEvent("olx", "profile info loaded", map[string]any{
+			"active_profile": s.ActiveProfileName(),
+			"username":       s.me.Username,
+			"full_name":      s.me.FullName,
+		})
 		return nil
 	}
 
@@ -347,11 +383,11 @@ func loadOLXTokenConfig(searchRoots []string) (string, string, string, []namedTo
 		var payload tokenFilePayload
 		if err := json.Unmarshal(content, &payload); err != nil {
 			var entries []namedTokenFile
-				if arrayErr := json.Unmarshal(content, &entries); arrayErr != nil {
-					continue
-				}
-				payload.Tokens = entries
+			if arrayErr := json.Unmarshal(content, &entries); arrayErr != nil {
+				continue
 			}
+			payload.Tokens = entries
+		}
 
 		if token := strings.TrimSpace(payload.Token); token != "" {
 			return tokenPath, strings.TrimSpace(payload.Name), strings.TrimPrefix(token, "Bearer "), payload.Tokens
@@ -444,6 +480,27 @@ func (a *App) handleCategoryItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		logEvent("category", "single categorization saved", map[string]any{
+			"brand_id": func() int {
+				if req.Brand == nil {
+					return 0
+				}
+				return req.Brand.ID
+			}(),
+			"category_id": func() int {
+				if req.Category == nil {
+					return 0
+				}
+				return req.Category.ID
+			}(),
+			"model_id": func() int {
+				if req.Model == nil {
+					return 0
+				}
+				return req.Model.ID
+			}(),
+			"tow_kod": towKod,
+		})
 		writeJSON(w, http.StatusOK, item)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -475,6 +532,16 @@ func (a *App) handleCategoryBulk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logEvent("category", "bulk categorization saved", map[string]any{
+		"category_id": func() int {
+			if req.Category == nil {
+				return 0
+			}
+			return req.Category.ID
+		}(),
+		"item_count": len(items),
+		"tow_kods":   req.TowKods,
+	})
 	writeJSON(w, http.StatusOK, items)
 }
 
@@ -536,6 +603,14 @@ func (a *App) handleSessionInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	logEvent("session", "session info requested", map[string]any{
+		"app_username":     response.AppUsername,
+		"authenticated":    response.Authenticated,
+		"available_tokens": response.AvailableTokens,
+		"profile_name":     response.ProfileName,
+		"token_configured": response.TokenConfigured,
+		"username":         response.Username,
+	})
 	writeJSON(w, http.StatusOK, response)
 }
 
