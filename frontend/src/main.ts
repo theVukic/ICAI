@@ -1213,6 +1213,7 @@ function bindEvents(): void {
         publishData.failed[0]?.error ||
         publishData.skipped[0]?.reason ||
         publishData.message;
+      const dailyLimitMessage = extractDailyListingLimitMessage(primaryMessage);
       state.message = `${summaryParts.join(" | ")}${primaryMessage ? ` | ${primaryMessage}` : ""}`;
       state.messageTone =
         publishData.failed.length > 0
@@ -1220,6 +1221,9 @@ function bindEvents(): void {
           : publishData.published.length > 0
             ? "success"
             : "muted";
+      if (dailyLimitMessage) {
+        showDailyLimitWarningToast(dailyLimitMessage);
+      }
       showPublishOutcomeToasts(publishData.published.length, publishData.failed.length);
     } catch (error) {
       console.error("[PUBLISH] frontend error", error);
@@ -2154,12 +2158,13 @@ function showPublishErrorToast(failedCount: number): void {
 function showDailyLimitWarningToast(message: string): void {
   notyf.open({
     type: "warning",
-    message,
+    message: `<strong>${escapeHtml(message)}</strong>`,
   });
 }
 
 function extractDailyListingLimitMessage(error: unknown): string {
-  const rawMessage = error instanceof Error ? error.message : "";
+  const rawMessage =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "";
   const targetMessage = "Prekoračili ste limit objave oglasa od 350 po danu!";
   if (!rawMessage.includes(targetMessage)) {
     return "";
