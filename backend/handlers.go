@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -89,6 +90,37 @@ func (a *App) handleCatalogClear(w http.ResponseWriter, r *http.Request) {
 		"temp_dir": a.store.TempDir(),
 	})
 	writeJSON(w, http.StatusOK, a.store.State())
+}
+
+func (a *App) handleCatalogExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req CatalogExportRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "neispravan export payload")
+		return
+	}
+
+	var archive bytes.Buffer
+	fileName, err := a.store.WriteExportZIP(&archive, req.ItemKeys, req.TowKods)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+fileName+`"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(archive.Bytes())
+
+	logEvent("catalog", "catalog export generated", map[string]any{
+		"file_name": fileName,
+		"item_keys": len(req.ItemKeys),
+		"tow_kods":  len(req.TowKods),
+	})
 }
 
 func (a *App) handleClientLogEvent(w http.ResponseWriter, r *http.Request) {

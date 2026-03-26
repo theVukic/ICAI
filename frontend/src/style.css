@@ -180,6 +180,21 @@ button {
     margin-right: auto;
 }
 
+.footer-actions-left {
+    display: inline-flex;
+    align-items: center;
+    gap: 18px;
+    margin-right: auto;
+}
+
+.footer-save-action {
+    min-width: 82px;
+}
+
+.footer-actions-left .footer-clear-action {
+    margin-right: 0;
+}
+
 .footer-actions-right {
     display: inline-flex;
     align-items: center;
@@ -254,20 +269,16 @@ button {
     background: linear-gradient(135deg, #a92f2f, #7f2020);
 }
 
+.notyf__toast--warning {
+    background: linear-gradient(135deg, #d6a62f, #b88310);
+}
+
 .notyf__toast {
     animation: publish-toast-in 240ms ease-out;
 }
 
 .notyf__toast::after {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 4px;
-    background: rgba(255, 255, 255, 0.82);
-    transform-origin: left center;
-    animation: publish-toast-timer var(--publish-toast-duration) linear forwards;
+    display: none;
 }
 
 .notyf__wrapper {
@@ -291,6 +302,29 @@ button {
 .notyf__icon--error,
 .notyf__icon--success {
     box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.16);
+}
+
+.notyf__toast--dismissible .notyf__wrapper {
+    padding-right: 18px;
+}
+
+.notyf__dismiss {
+    top: 10px;
+    right: 10px;
+    width: 28px;
+    height: 28px;
+    margin-right: 0;
+}
+
+.notyf__dismiss-btn {
+    background: rgba(0, 0, 0, 0.18);
+    border-radius: 999px;
+    opacity: 0.72;
+}
+
+.notyf__dismiss-btn:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.28);
 }
 
 @keyframes publish-toast-in {
@@ -536,6 +570,7 @@ button {
 
 .primary-button,
 .danger-button,
+.save-footer-button,
 .publish-button,
 .description-button,
 .drop-inline-button {
@@ -559,6 +594,7 @@ button {
 .primary-button:hover,
 .publish-button:hover,
 .danger-button:hover,
+.save-footer-button:hover,
 .description-button:hover,
 .drop-inline-button:hover,
 .drop-simple-button:hover,
@@ -570,6 +606,7 @@ button {
 .topbar .primary-button:hover,
 .footer-bar .publish-button:hover,
 .footer-bar .danger-button:hover,
+.footer-bar .save-footer-button:hover,
 .footer-bar .description-button:hover,
 .drop-inline-button:hover {
     transform: scale(1.06);
@@ -907,6 +944,10 @@ button {
     color: #ff8f8f;
 }
 
+.save-footer-button {
+    color: #3291ff;
+}
+
 .publish-button {
     color: #63d98c;
 }
@@ -947,6 +988,15 @@ button {
 
 .description-action-label {
     transform: translateY(-11px);
+}
+
+.save-footer-button .button-icon svg path {
+    fill: currentColor;
+}
+
+.save-footer-button .button-icon svg {
+    width: 28px;
+    height: 28px;
 }
 
 .main-layout {
@@ -2651,10 +2701,16 @@ button {
 
     .primary-button,
     .danger-button,
+    .save-footer-button,
     .publish-button,
     .description-button {
         min-height: 40px;
         padding: 0 14px;
+    }
+
+    .footer-actions-left {
+        gap: 10px;
+        margin-right: 0;
     }
 
     .footer-actions-right {

@@ -78,6 +78,11 @@ type CatalogBulkDeleteRequest struct {
 	TowKods  []string `json:"towKods,omitempty"`
 }
 
+type CatalogExportRequest struct {
+	ItemKeys []string `json:"itemKeys,omitempty"`
+	TowKods  []string `json:"towKods,omitempty"`
+}
+
 type ItemCategorySelection struct {
 	Category   *OLXCategoryNode  `json:"category,omitempty"`
 	Brand      *OLXBrand         `json:"brand,omitempty"`

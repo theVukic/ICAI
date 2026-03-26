@@ -415,6 +415,177 @@ func safeZipJoin(baseDir string, zipEntry string) (string, error) {
 	return cleanTarget, nil
 }
 
+func (s *CatalogStore) WriteExportZIP(w io.Writer, itemKeys []string, towKods []string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	state := s.buildStateLocked()
+	items := state.Items
+	if len(items) == 0 {
+		return "", fmt.Errorf("nema učitanih artikala za čuvanje")
+	}
+
+	targets := newCatalogSelectionTargets(itemKeys, towKods)
+	selectedItems := make([]CatalogItem, 0, len(items))
+	if targets.Empty() {
+		selectedItems = append(selectedItems, items...)
+	} else {
+		for _, item := range items {
+			item.SelectionKey = catalogItemSelectionKey(item)
+			if targets.Match(item) {
+				selectedItems = append(selectedItems, item)
+			}
+		}
+	}
+
+	if len(selectedItems) == 0 {
+		return "", fmt.Errorf("artikli nisu pronađeni")
+	}
+
+	archiveName := "ICAI-" + time.Now().Format("20060102-150405") + ".zip"
+	zipWriter := zip.NewWriter(w)
+
+	exportPayload := CatalogPayload{
+		GeneratedAt: time.Now().Format(time.RFC3339),
+		TimeZone:    time.Now().Location().String(),
+		TotalItems:  len(selectedItems),
+		Items:       make([]CatalogItem, 0, len(selectedItems)),
+	}
+
+	usedImagePaths := make(map[string]string)
+	usedEntryNames := make(map[string]struct{})
+	for _, item := range selectedItems {
+		exportItem := item
+		exportItem.Images = cloneCatalogImages(item.Images)
+
+		itemSlug := sanitizeExportName(firstNonEmpty(item.TowKod, item.Index, "artikal"))
+		if itemSlug == "" {
+			itemSlug = "artikal"
+		}
+
+		for imageIndex := range exportItem.Images {
+			image := &exportItem.Images[imageIndex]
+			sourcePath := strings.TrimSpace(image.Path)
+			if sourcePath == "" {
+				continue
+			}
+
+			entryName, ok := usedImagePaths[sourcePath]
+			if !ok {
+				baseName := filepath.Base(sourcePath)
+				baseName = sanitizeExportName(baseName)
+				if baseName == "" {
+					baseName = fmt.Sprintf("image-%d.jpg", imageIndex+1)
+				}
+				entryName = uniqueZIPEntryName(
+					fmt.Sprintf("images/%s/%s", itemSlug, baseName),
+					usedEntryNames,
+				)
+				if err := addFileToZIP(zipWriter, entryName, sourcePath); err == nil {
+					usedImagePaths[sourcePath] = entryName
+				} else {
+					logEvent("catalog", "export image skipped", map[string]any{
+						"source_path": sourcePath,
+						"reason":      err.Error(),
+					})
+					continue
+				}
+			}
+
+			image.Path = filepath.ToSlash(entryName)
+		}
+
+		exportPayload.Items = append(exportPayload.Items, exportItem)
+	}
+
+	catalogEntry, err := zipWriter.Create("catalog.json")
+	if err != nil {
+		return "", fmt.Errorf("nije moguće kreirati catalog.json u ZIP-u: %w", err)
+	}
+	if err := json.NewEncoder(catalogEntry).Encode(exportPayload); err != nil {
+		return "", fmt.Errorf("nije moguće upisati catalog.json u ZIP: %w", err)
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		return "", fmt.Errorf("nije moguće završiti ZIP export: %w", err)
+	}
+
+	return archiveName, nil
+}
+
+func cloneCatalogImages(images []CatalogImage) []CatalogImage {
+	if len(images) == 0 {
+		return nil
+	}
+	cloned := make([]CatalogImage, len(images))
+	copy(cloned, images)
+	return cloned
+}
+
+func addFileToZIP(zipWriter *zip.Writer, entryName string, sourcePath string) error {
+	input, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+
+	entryWriter, err := zipWriter.Create(filepath.ToSlash(entryName))
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(entryWriter, input)
+	return err
+}
+
+func uniqueZIPEntryName(entryName string, used map[string]struct{}) string {
+	normalized := filepath.ToSlash(strings.TrimSpace(entryName))
+	if normalized == "" {
+		normalized = "file"
+	}
+
+	if _, exists := used[normalized]; !exists {
+		used[normalized] = struct{}{}
+		return normalized
+	}
+
+	ext := filepath.Ext(normalized)
+	base := strings.TrimSuffix(normalized, ext)
+	for counter := 2; ; counter++ {
+		candidate := fmt.Sprintf("%s-%d%s", base, counter, ext)
+		if _, exists := used[candidate]; exists {
+			continue
+		}
+		used[candidate] = struct{}{}
+		return candidate
+	}
+}
+
+func sanitizeExportName(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+
+	replacer := strings.NewReplacer(
+		"\\", "-",
+		"/", "-",
+		":", "-",
+		"*", "-",
+		"?", "-",
+		"\"", "-",
+		"<", "-",
+		">", "-",
+		"|", "-",
+	)
+	sanitized := replacer.Replace(trimmed)
+	sanitized = strings.ReplaceAll(sanitized, " ", "-")
+	for strings.Contains(sanitized, "--") {
+		sanitized = strings.ReplaceAll(sanitized, "--", "-")
+	}
+	return strings.Trim(sanitized, "-.")
+}
+
 func (s *CatalogStore) removeCatalogFiles(catalog UploadedCatalog) error {
 	if strings.TrimSpace(catalog.SavedPath) == "" {
 		return nil

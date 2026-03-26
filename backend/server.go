@@ -249,6 +249,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 
 	protectedAPI.HandleFunc("/api/catalog/bulk-delete", a.handleCatalogBulkDelete)
 	protectedAPI.HandleFunc("/api/catalog/bulk-edit", a.handleCatalogBulkEdit)
+	protectedAPI.HandleFunc("/api/catalog/export", a.handleCatalogExport)
 	protectedAPI.HandleFunc("/api/catalog/publish", a.handleCatalogPublish)
 	protectedAPI.HandleFunc("/api/catalog/item/", a.handleCatalogItem)
 	protectedAPI.HandleFunc("/api/description/render/", a.handleDescriptionRender)

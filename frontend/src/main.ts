@@ -138,10 +138,18 @@ mountPageTransition(root);
 let authPollTimer: number | null = null;
 
 const notyf = new Notyf({
-  duration: 4200,
+  duration: 0,
   position: { x: "right", y: "top" },
-  dismissible: false,
+  dismissible: true,
   ripple: false,
+  types: [
+    {
+      type: "warning",
+      background: "linear-gradient(135deg, #d6a62f, #b88310)",
+      icon: false,
+      className: "notyf__toast--warning",
+    },
+  ],
 });
 
 const state: {
@@ -251,6 +259,12 @@ const deleteIcon = `
     <path d="m424.28 387.96h9.3203v92.449H424.28z" />
     <path d="m395.36 387.96h9.3203v92.449H395.36z" />
     <path d="m545.3 208.55H254.7c-12.238 0-23.977 4.8633-32.633 13.516-8.6523 8.6562-13.516 20.395-13.516 32.633v290.6c0 12.238 4.8633 23.977 13.516 32.633 8.6562 8.6562 20.395 13.516 32.633 13.516h290.6c12.238 0 23.977-4.8594 32.633-13.516s13.516-20.395 13.516-32.633v-290.6c0-12.238-4.8594-23.977-13.516-32.633-8.6562-8.6523-20.395-13.516-32.633-13.516zm-176.33 97.539c0-7.5703 6.1328-13.703 13.703-13.703h34.562c3.6328 0 7.1172 1.4414 9.6875 4.0117 2.5703 2.5703 4.0156 6.0547 4.0156 9.6914v13.301h-61.918zm84.641 183.44c-.51562 4.9766-2.8633 9.5859-6.5859 12.93-3.7266 3.3438-8.5625 5.1797-13.566 5.1562h-66.906c-5.0078.023438-9.8438-1.8125-13.566-5.1562-3.7266-3.3438-6.0742-7.9531-6.5859-12.93l-13.957-121.72h135.12zm30.23-133.71c-1.7109 1.7461-4.0547 2.7305-6.5 2.7227h-154.92c-2.4375 0-4.7773-.97266-6.5-2.7031s-2.6797-4.0781-2.668-6.5156c-.027344-5.5156 2.1523-10.809 6.0508-14.707 3.8984-3.8984 9.1914-6.0781 14.707-6.0508h132.05c5.4961.011718 10.766 2.207 14.645 6.0977 3.8828 3.8906 6.0625 9.1641 6.0625 14.66.015625 2.4336-.94531 4.7734-2.668 6.4961z" />
+  </svg>
+`;
+
+const saveIcon = `
+  <svg viewBox="144 144 512 512" aria-hidden="true">
+    <path d="m276.2 601.54h-13.375c-11.234 0-16.852-13.602-8.8672-21.512l128.04-127.36c9.625-9.5977 9.6758-25.168 0.10156-34.812-9.6211-9.7266-25.34-9.7266-34.965 0l-127.14 128.14c-7.9102 7.9883-21.535 2.3711-21.535-8.8672v-11.156c0-13.906-11.262-25.191-25.191-25.191-13.906 0-25.191 11.285-25.191 25.191v75.57c0 27.809 22.57 50.379 50.383 50.379h77.734c13.781 0 24.992-11.059 25.191-24.812 0.20312-14.055-11.133-25.566-25.191-25.566m375.69-289.92v289.92c0 27.809-22.543 50.379-50.379 50.379h-226.71c-13.906 0-25.191-11.285-25.191-25.188 0-13.906 11.285-25.191 25.191-25.191h201.52c13.93 0 25.191-11.285 25.191-25.191v-226.71h-100.76c-27.812 0-50.383-22.57-50.383-50.379v-100.76h-226.71c-13.902 0-25.188 11.285-25.188 25.191v201.52c0 13.902-11.262 25.188-25.191 25.188-13.906 0-25.191-11.285-25.191-25.188v-226.71c0-27.836 22.57-50.383 50.383-50.383h291.75c6.75 0 13.199 2.6953 17.938 7.5078l136.48 138.32c4.6602 4.7109 7.2539 11.059 7.2539 17.684" fill-rule="evenodd" />
   </svg>
 `;
 
@@ -749,11 +763,24 @@ function render(): void {
       </main>
 
       <footer class="footer-bar">
-        <div class="toolbar-action footer-clear-action">
-          <button class="danger-button" id="clearButton">
-            <span class="button-icon">${deleteIcon}</span>
-          </button>
-          <span class="action-label">OBRISI</span>
+        <div class="footer-actions-left">
+          <div class="toolbar-action footer-clear-action">
+            <button class="danger-button" id="clearButton">
+              <span class="button-icon">${deleteIcon}</span>
+            </button>
+            <span class="action-label">OBRISI</span>
+          </div>
+          <div class="toolbar-action footer-save-action">
+            <button
+              class="save-footer-button"
+              id="saveButton"
+              type="button"
+              ${state.data.items.length === 0 ? "disabled" : ""}
+            >
+              <span class="button-icon">${saveIcon}</span>
+            </button>
+            <span class="action-label">SACUVAJ</span>
+          </div>
         </div>
         <div class="footer-counts" aria-live="polite">
           <span class="footer-count-total">${state.data.totalItems}</span>
@@ -825,6 +852,7 @@ function bindEvents(): void {
     document.querySelector<HTMLButtonElement>("#browseButton");
   const dropZone = document.querySelector<HTMLElement>("#dropZone");
   const clearButton = document.querySelector<HTMLButtonElement>("#clearButton");
+  const saveButton = document.querySelector<HTMLButtonElement>("#saveButton");
   const descriptionButton =
     document.querySelector<HTMLButtonElement>("#descriptionButton");
   const publishButton =
@@ -1043,6 +1071,36 @@ function bindEvents(): void {
     navigateWithFade(root, "/description");
   });
 
+  saveButton?.addEventListener("click", async () => {
+    if (state.data.items.length === 0) {
+      return;
+    }
+
+    try {
+      const exportLabel =
+        state.selectedTowKods.length > 0 ? "Cuvam selektovane artikle..." : "Cuvam sve artikle...";
+      state.message = exportLabel;
+      state.messageTone = "muted";
+      render();
+
+      await exportCatalogArchive();
+      state.message = "Katalog je sacuvan.";
+      state.messageTone = "success";
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        state.message = "Cuvanje je otkazano.";
+        state.messageTone = "muted";
+        render();
+        return;
+      }
+      state.message =
+        error instanceof Error ? error.message : "Cuvanje nije uspelo.";
+      state.messageTone = "danger";
+    }
+
+    render();
+  });
+
   publishButton?.addEventListener("click", async () => {
     if (state.data.items.length === 0) {
       return;
@@ -1166,12 +1224,18 @@ function bindEvents(): void {
     } catch (error) {
       console.error("[PUBLISH] frontend error", error);
       const restored = await reloadStateAfterPublishFailure(optimisticSnapshot);
+      const dailyLimitMessage = extractDailyListingLimitMessage(error);
       if (!restored) {
         state.message =
-          error instanceof Error ? error.message : "Objava nije uspela.";
-        state.messageTone = "danger";
+          dailyLimitMessage ||
+          (error instanceof Error ? error.message : "Objava nije uspela.");
+        state.messageTone = dailyLimitMessage ? "muted" : "danger";
       }
-      showPublishErrorToast(publishTowKods.length);
+      if (dailyLimitMessage) {
+        showDailyLimitWarningToast(dailyLimitMessage);
+      } else {
+        showPublishErrorToast(publishTowKods.length);
+      }
     } finally {
       state.activePublishCount = Math.max(0, state.activePublishCount - 1);
       render();
@@ -1875,6 +1939,97 @@ function saveStoredSelectedTowKods(values: string[]): void {
   );
 }
 
+async function exportCatalogArchive(): Promise<void> {
+  const response = await fetch("/api/catalog/export", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      itemKeys: state.selectedTowKods,
+    }),
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as ErrorResponse | null;
+    throw new Error(data?.error || "Cuvanje nije uspelo.");
+  }
+
+  const blob = await response.blob();
+  const suggestedName =
+    getSuggestedExportFileName(response.headers.get("Content-Disposition")) ||
+    `ICAI-${buildExportTimestamp()}.zip`;
+  await saveBlobWithPicker(blob, suggestedName);
+}
+
+async function saveBlobWithPicker(blob: Blob, suggestedName: string): Promise<void> {
+  const picker = (window as Window & {
+    showSaveFilePicker?: (options?: {
+      suggestedName?: string;
+      types?: Array<{
+        description?: string;
+        accept: Record<string, string[]>;
+      }>;
+    }) => Promise<{
+      createWritable: () => Promise<{
+        write: (data: Blob) => Promise<void>;
+        close: () => Promise<void>;
+      }>;
+    }>;
+  }).showSaveFilePicker;
+
+  if (picker) {
+    const handle = await picker({
+      suggestedName,
+      types: [
+        {
+          description: "ZIP arhiva",
+          accept: {
+            "application/zip": [".zip"],
+          },
+        },
+      ],
+    });
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return;
+  }
+
+  const objectURL = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectURL;
+  link.download = suggestedName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectURL), 0);
+}
+
+function getSuggestedExportFileName(contentDisposition: string | null): string {
+  if (!contentDisposition) {
+    return "";
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+
+  const plainMatch = contentDisposition.match(/filename="([^"]+)"/i);
+  if (plainMatch?.[1]) {
+    return plainMatch[1];
+  }
+
+  return "";
+}
+
+function buildExportTimestamp(): string {
+  const now = new Date();
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
 function handleOlxTokenMenuOutsideClick(): void {
   if (!state.olxTokenMenuOpen) {
     return;
@@ -1994,6 +2149,22 @@ function showPublishOutcomeToasts(successCount: number, failedCount: number): vo
 function showPublishErrorToast(failedCount: number): void {
   const safeCount = Math.max(1, failedCount);
   notyf.error(`Neuspjesno ste objavili ${safeCount} artikala!`);
+}
+
+function showDailyLimitWarningToast(message: string): void {
+  notyf.open({
+    type: "warning",
+    message,
+  });
+}
+
+function extractDailyListingLimitMessage(error: unknown): string {
+  const rawMessage = error instanceof Error ? error.message : "";
+  const targetMessage = "Prekoračili ste limit objave oglasa od 350 po danu!";
+  if (!rawMessage.includes(targetMessage)) {
+    return "";
+  }
+  return targetMessage;
 }
 
 function getSelectableTowKods(items: CatalogItem[]): string[] {
