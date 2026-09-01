@@ -58,6 +58,10 @@ type olxMeResponse struct {
 	Username  string `json:"username"`
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
+	UserType  string `json:"user_type"`
+	Type      string `json:"type"`
+	IsShop    bool   `json:"is_shop"`
+	Shop      any    `json:"shop"`
 }
 
 func NewOLXCategoryService(searchRoots []string) *OLXCategoryService {
@@ -108,6 +112,12 @@ func (s *OLXCategoryService) SessionInfo() SessionInfoResponse {
 	}
 	response.AvailableTokens = s.AvailableProfiles()
 	return response
+}
+
+// IsShopAccount reports whether the account authenticated by the active OLX
+// token is a shop. SKU numbers are an OLX shop-only capability.
+func (s *OLXCategoryService) IsShopAccount() bool {
+	return s.me.IsShop
 }
 
 func (s *OLXCategoryService) AvailableProfiles() []string {
@@ -253,39 +263,61 @@ func (s *OLXCategoryService) LoadMe(ctx context.Context) error {
 		return err
 	}
 
+	profile, ok := parseOLXMeResponse(body)
+	if !ok {
+		return fmt.Errorf("OLX /me odgovor nema username")
+	}
+
+	s.me = SessionInfoResponse{
+		TokenConfigured: true,
+		Username:        profile.Username,
+		FullName:        strings.TrimSpace(profile.FirstName + " " + profile.LastName),
+		ProfileName:     firstNonEmpty(strings.TrimSpace(s.tokenName), strings.TrimSpace(profile.Username), "default"),
+		UserType:        profile.userType(),
+		IsShop:          profile.isShopAccount(),
+	}
+	logEvent("olx", "profile info loaded", map[string]any{
+		"active_profile": s.ActiveProfileName(),
+		"username":       s.me.Username,
+		"full_name":      s.me.FullName,
+		"user_type":      s.me.UserType,
+		"is_shop":        s.me.IsShop,
+	})
+	return nil
+}
+
+func parseOLXMeResponse(body []byte) (olxMeResponse, bool) {
 	var direct olxMeResponse
 	if err := json.Unmarshal(body, &direct); err == nil && strings.TrimSpace(direct.Username) != "" {
-		s.me = SessionInfoResponse{
-			TokenConfigured: true,
-			Username:        direct.Username,
-			FullName:        strings.TrimSpace(direct.FirstName + " " + direct.LastName),
-			ProfileName:     firstNonEmpty(strings.TrimSpace(s.tokenName), strings.TrimSpace(direct.Username), "default"),
-		}
-		logEvent("olx", "profile info loaded", map[string]any{
-			"active_profile": s.ActiveProfileName(),
-			"username":       s.me.Username,
-			"full_name":      s.me.FullName,
-		})
-		return nil
+		return direct, true
 	}
 
 	var wrapped olxDataResponse[olxMeResponse]
 	if err := json.Unmarshal(body, &wrapped); err == nil && strings.TrimSpace(wrapped.Data.Username) != "" {
-		s.me = SessionInfoResponse{
-			TokenConfigured: true,
-			Username:        wrapped.Data.Username,
-			FullName:        strings.TrimSpace(wrapped.Data.FirstName + " " + wrapped.Data.LastName),
-			ProfileName:     firstNonEmpty(strings.TrimSpace(s.tokenName), strings.TrimSpace(wrapped.Data.Username), "default"),
-		}
-		logEvent("olx", "profile info loaded", map[string]any{
-			"active_profile": s.ActiveProfileName(),
-			"username":       s.me.Username,
-			"full_name":      s.me.FullName,
-		})
-		return nil
+		return wrapped.Data, true
 	}
 
-	return fmt.Errorf("OLX /me odgovor nema username")
+	return olxMeResponse{}, false
+}
+
+func (r olxMeResponse) userType() string {
+	return firstNonEmpty(strings.TrimSpace(r.UserType), strings.TrimSpace(r.Type))
+}
+
+func (r olxMeResponse) isShopAccount() bool {
+	if strings.EqualFold(r.userType(), "shop") || r.IsShop {
+		return true
+	}
+
+	// Some OLX profile responses expose a shop object instead of user_type.
+	// A non-null, non-false value is sufficient evidence of a shop account.
+	if r.Shop == nil {
+		return false
+	}
+	if value, ok := r.Shop.(bool); ok {
+		return value
+	}
+	return true
 }
 
 func (s *OLXCategoryService) FindCategories(ctx context.Context, name string) ([]OLXCategorySuggestion, error) {
@@ -401,6 +433,9 @@ func (s *OLXCategoryService) getJSONWithRetry(ctx context.Context, requestURL st
 
 func formatOLXAPIError(statusCode int, body []byte) error {
 	trimmedBody := strings.TrimSpace(string(body))
+	// Keep the provider response in the application log. OLX often includes the
+	// rejected field in this JSON even when its top-level message is generic.
+	log.Printf("[OLX] API request rejected status=%d response=%s", statusCode, trimmedBody)
 
 	var payload olxAPIErrorEnvelope
 	if err := json.Unmarshal(body, &payload); err == nil && payload.Error != nil {
@@ -410,7 +445,7 @@ func formatOLXAPIError(statusCode int, body []byte) error {
 			return fmt.Errorf("OLX je privremeno nedostupan (%d). Pokušaj ponovo za nekoliko trenutaka", statusCode)
 		}
 		if message != "" {
-			return fmt.Errorf("OLX API greška (%d): %s", statusCode, message)
+			return fmt.Errorf("OLX API greška (%d): %s. OLX detalji: %s", statusCode, message, trimmedBody)
 		}
 	}
 
@@ -506,7 +541,7 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (a *App) handleCategoryItem(w http.ResponseWriter, r *http.Request) {
-	towKod, err := itemCodeFromPath(strings.TrimPrefix(r.URL.Path, "/api/category/item"))
+	itemID, err := itemIDFromPath(strings.TrimPrefix(r.URL.Path, "/api/category/item"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -514,7 +549,7 @@ func (a *App) handleCategoryItem(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		item, getErr := a.store.GetItemByTowKod(towKod)
+		item, getErr := a.store.GetItemByID(itemID)
 		if getErr != nil {
 			if errors.Is(getErr, errCatalogItemNotFound) {
 				writeError(w, http.StatusNotFound, getErr.Error())
@@ -543,7 +578,7 @@ func (a *App) handleCategoryItem(w http.ResponseWriter, r *http.Request) {
 			Attributes: req.Attributes,
 		}
 
-		item, saveErr := a.store.SaveCategorization(towKod, selection)
+		item, saveErr := a.store.SaveCategorization(itemID, selection)
 		if saveErr != nil {
 			if errors.Is(saveErr, errCatalogItemNotFound) {
 				writeError(w, http.StatusNotFound, saveErr.Error())
@@ -572,7 +607,7 @@ func (a *App) handleCategoryItem(w http.ResponseWriter, r *http.Request) {
 				}
 				return req.Model.ID
 			}(),
-			"tow_kod": towKod,
+			"item_id": itemID,
 		})
 		writeJSON(w, http.StatusOK, item)
 	default:

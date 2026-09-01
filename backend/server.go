@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	defaultHostAlias       = "icai-app.localhost"
+	defaultHostAlias       = "asi-app.localhost"
 	singleInstanceLockAddr = "127.0.0.1:46321"
 )
 
@@ -85,7 +85,7 @@ func NewApp() (*App, error) {
 	app := &App{
 		store:          store,
 		distDir:        distDir,
-		runtimeURLPath: filepath.Join(os.TempDir(), "icai-app-runtime-url.txt"),
+		runtimeURLPath: filepath.Join(os.TempDir(), "asi-app-runtime-url.txt"),
 		descriptionDir: resolveDescriptionDir([]string{
 			storagePaths.DescriptionDir,
 			filepath.Join(workDir, "description"),

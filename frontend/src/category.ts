@@ -408,7 +408,7 @@ function renderCategoryPage(root: HTMLDivElement, towKod: string): void {
                                     .slice()
                                     .sort((a, b) => a.order - b.order)
                                     .map((attribute) =>
-                                      renderAttributeField(attribute, state.attributeValues[attribute.name] || ""),
+                                      renderAttributeField(attribute, getAttributeValue(attribute)),
                                     )
                                     .join("")}
                                 </div>
@@ -445,12 +445,13 @@ function renderCategoryPage(root: HTMLDivElement, towKod: string): void {
 function renderAttributeField(attribute: OLXCategoryAttribute, value: string): string {
   const label = `${escapeHtml(attribute.display_name || attribute.name)}${attribute.required ? " *" : ""}`;
   const fieldId = `attr-${attribute.id}`;
+  const attributeKey = String(attribute.id);
 
   if (attribute.input_type === "select") {
     return `
       <label class="edit-field">
         <span>${label}</span>
-        <select data-attribute-name="${escapeHtml(attribute.name)}" id="${fieldId}" class="${state.invalidFields.includes(attribute.name) ? "field-invalid" : ""}">
+        <select data-attribute-key="${attributeKey}" id="${fieldId}" class="${state.invalidFields.includes(attributeKey) ? "field-invalid" : ""}">
           <option value="">Izaberi</option>
           ${attribute.options
             .map(
@@ -466,8 +467,8 @@ function renderAttributeField(attribute: OLXCategoryAttribute, value: string): s
 
   if (attribute.input_type === "checkbox" || attribute.type === "boolean") {
     return `
-      <label class="category-checkbox ${state.invalidFields.includes(attribute.name) ? "field-invalid" : ""}">
-        <input type="checkbox" data-attribute-name="${escapeHtml(attribute.name)}" ${value === "true" ? "checked" : ""} />
+      <label class="category-checkbox ${state.invalidFields.includes(attributeKey) ? "field-invalid" : ""}">
+        <input type="checkbox" data-attribute-key="${attributeKey}" ${value === "true" ? "checked" : ""} />
         <span>${label}</span>
       </label>
     `;
@@ -481,7 +482,7 @@ function renderAttributeField(attribute: OLXCategoryAttribute, value: string): s
   return `
     <label class="edit-field">
       <span>${label}</span>
-      <input id="${fieldId}" data-attribute-name="${escapeHtml(attribute.name)}" class="${state.invalidFields.includes(attribute.name) ? "field-invalid" : ""}" type="${inputType}" value="${escapeHtml(value)}" />
+      <input id="${fieldId}" data-attribute-key="${attributeKey}" class="${state.invalidFields.includes(attributeKey) ? "field-invalid" : ""}" type="${inputType}" value="${escapeHtml(value)}" />
     </label>
   `;
 }
@@ -499,7 +500,7 @@ function bindCategoryEvents(
   const resultButtons = document.querySelectorAll<HTMLButtonElement>("[data-category-id]");
   const brandSelect = document.querySelector<HTMLSelectElement>("#categoryBrandSelect");
   const modelSelect = document.querySelector<HTMLSelectElement>("#categoryModelSelect");
-  const attributeInputs = document.querySelectorAll<HTMLElement>("[data-attribute-name]");
+  const attributeInputs = document.querySelectorAll<HTMLElement>("[data-attribute-key]");
 
   backButton?.addEventListener("click", () => {
     navigateWithFade(root, "/");
@@ -551,15 +552,15 @@ function bindCategoryEvents(
   });
 
   for (const input of attributeInputs) {
-    const attributeName = input.dataset.attributeName;
-    if (!attributeName) {
+    const attributeKey = input.dataset.attributeKey;
+    if (!attributeKey) {
       continue;
     }
 
     if (input instanceof HTMLInputElement && input.type === "checkbox") {
       input.addEventListener("change", () => {
-        state.attributeValues[attributeName] = input.checked ? "true" : "false";
-        state.invalidFields = state.invalidFields.filter((field) => field !== attributeName);
+        state.attributeValues[attributeKey] = input.checked ? "true" : "false";
+        state.invalidFields = state.invalidFields.filter((field) => field !== attributeKey);
       });
       continue;
     }
@@ -569,8 +570,8 @@ function bindCategoryEvents(
         input instanceof HTMLInputElement || input instanceof HTMLSelectElement
           ? input.value
           : "";
-      state.attributeValues[attributeName] = formValue;
-      state.invalidFields = state.invalidFields.filter((field) => field !== attributeName);
+      state.attributeValues[attributeKey] = formValue;
+      state.invalidFields = state.invalidFields.filter((field) => field !== attributeKey);
     });
   }
 
@@ -844,11 +845,12 @@ function validateCategorySelection(): { message: string; invalidFields: string[]
       continue;
     }
 
-    const value = (state.attributeValues[attribute.name] || "").trim();
+    const attributeKey = String(attribute.id);
+    const value = getAttributeValue(attribute).trim();
     if (value === "") {
       return {
         message: `Izaberi ${attribute.display_name || attribute.name} da bi sačuvao.`,
-        invalidFields: [attribute.name],
+        invalidFields: [attributeKey],
       };
     }
   }
@@ -858,6 +860,10 @@ function validateCategorySelection(): { message: string; invalidFields: string[]
 
 async function loadModels(categoryID: number, brandID: number): Promise<void> {
   state.models = await getCategoryModels(categoryID, brandID);
+}
+
+function getAttributeValue(attribute: OLXCategoryAttribute): string {
+  return state.attributeValues[String(attribute.id)] || state.attributeValues[attribute.name] || "";
 }
 
 async function getCategoryPageData(towKod: string): Promise<CategoryPageResponse> {

@@ -31,16 +31,16 @@ import (
 )
 
 const (
-	minUploadAspectRatio = 0.8
-	blurRadius           = 18
-	uploadJPEGQuality    = 92
-	publishWorkerCount   = 2
-	imageUploadAttempts  = 2
-	createListingAttempts = 2
+	minUploadAspectRatio   = 0.8
+	blurRadius             = 18
+	uploadJPEGQuality      = 92
+	publishWorkerCount     = 2
+	imageUploadAttempts    = 2
+	createListingAttempts  = 2
 	publishListingAttempts = 3
-	listingLimitsAttempts = 3
-	retryBaseDelay       = 2 * time.Second
-	largeBatchThreshold  = 20
+	listingLimitsAttempts  = 3
+	retryBaseDelay         = 2 * time.Second
+	largeBatchThreshold    = 20
 )
 
 type publishJob struct {
@@ -186,9 +186,12 @@ func (a *App) publishCatalogItems(ctx context.Context, items []CatalogItem) (Cat
 		Failed:    []FailedListingResult{},
 	}
 
-	publishedTowKods := make([]string, 0)
+	// TowKod is not a unique identifier: a supplier can use the same code for
+	// several fitments. Keep the per-catalog selection key throughout publishing
+	// so a successful item cannot remove failed items with the same TowKod.
+	publishedSelectionKeys := make([]string, 0)
 	defer func() {
-		a.store.ReleasePublishReservations(collectUnpublishedSelectionKeys(items, publishedTowKods))
+		a.store.ReleasePublishReservations(collectUnpublishedSelectionKeys(items, publishedSelectionKeys))
 	}()
 	publishableJobs := make([]publishJob, 0)
 
@@ -238,7 +241,7 @@ func (a *App) publishCatalogItems(ctx context.Context, items []CatalogItem) (Cat
 				continue
 			}
 
-			publishedTowKods = append(publishedTowKods, outcome.item.TowKod)
+			publishedSelectionKeys = append(publishedSelectionKeys, outcome.item.SelectionKey)
 			log.Printf("[PUBLISH] success towKod=%s listingID=%d", outcome.item.TowKod, outcome.listingID)
 			result.Published = append(result.Published, PublishedListingResult{
 				TowKod:      outcome.item.TowKod,
@@ -251,8 +254,8 @@ func (a *App) publishCatalogItems(ctx context.Context, items []CatalogItem) (Cat
 		}
 	}
 
-	if len(publishedTowKods) > 0 {
-		if err := a.store.DeleteItemsBulk(nil, publishedTowKods); err != nil {
+	if len(publishedSelectionKeys) > 0 {
+		if err := a.store.DeleteItemsBulk(publishedSelectionKeys, nil); err != nil {
 			return CatalogPublishResponse{}, http.StatusInternalServerError, fmt.Errorf("objava je uspela ali čišćenje temp artikala nije uspelo: %w", err)
 		}
 	}
@@ -286,15 +289,15 @@ func extractSelectionKeys(items []CatalogItem) []string {
 	return values
 }
 
-func collectUnpublishedSelectionKeys(items []CatalogItem, publishedTowKods []string) []string {
-	publishedSet := make(map[string]struct{}, len(publishedTowKods))
-	for _, towKod := range publishedTowKods {
-		publishedSet[strings.TrimSpace(towKod)] = struct{}{}
+func collectUnpublishedSelectionKeys(items []CatalogItem, publishedSelectionKeys []string) []string {
+	publishedSet := make(map[string]struct{}, len(publishedSelectionKeys))
+	for _, selectionKey := range publishedSelectionKeys {
+		publishedSet[strings.TrimSpace(selectionKey)] = struct{}{}
 	}
 
 	remaining := make([]string, 0, len(items))
 	for _, item := range items {
-		if _, ok := publishedSet[strings.TrimSpace(item.TowKod)]; ok {
+		if _, ok := publishedSet[strings.TrimSpace(item.SelectionKey)]; ok {
 			continue
 		}
 		remaining = append(remaining, item.SelectionKey)
@@ -424,6 +427,11 @@ func (a *App) buildListingPayload(
 	title := buildListingTitle(item)
 	description := buildListingDescription(item, renderDescriptionTemplate(document.Content, item))
 
+	mappedAttributes, err := validateAndMapOLXAttributeValues(attributes, item.Categorization.Attributes)
+	if err != nil {
+		return olxCreateListingRequest{}, fmt.Errorf("neispravni atributi za kategoriju %d: %w", categoryID, err)
+	}
+
 	payload := olxCreateListingRequest{
 		Title:            title,
 		ShortDescription: buildShortDescription(item),
@@ -432,10 +440,10 @@ func (a *App) buildListingPayload(
 		Available:        true,
 		ListingType:      "sell",
 		State:            "new",
-		SKUNumber:        firstNonEmpty(strings.TrimSpace(item.Index), strings.TrimSpace(item.TowKod)),
 		CategoryID:       strconv.Itoa(categoryID),
-		Attributes:       mapOLXAttributeValues(attributes, item.Categorization.Attributes),
+		Attributes:       mappedAttributes,
 	}
+	payload.SKUNumber = skuNumberForListing(item, a.olxCategories.IsShopAccount())
 
 	if item.Categorization.Brand != nil && item.Categorization.Brand.ID > 0 {
 		payload.BrandID = strconv.Itoa(item.Categorization.Brand.ID)
@@ -446,6 +454,13 @@ func (a *App) buildListingPayload(
 	}
 
 	return payload, nil
+}
+
+func skuNumberForListing(item CatalogItem, isShop bool) string {
+	if !isShop {
+		return ""
+	}
+	return firstNonEmpty(strings.TrimSpace(item.Index), strings.TrimSpace(item.TowKod))
 }
 
 func newCategoryAttributesCache() *categoryAttributesCache {
@@ -598,12 +613,26 @@ func compactUniqueStrings(values ...string) []string {
 }
 
 func mapOLXAttributeValues(attributes []OLXCategoryAttribute, values map[string]string) []olxListingAttributeValue {
+	result, _ := validateAndMapOLXAttributeValues(attributes, values)
+	return result
+}
+
+// validateAndMapOLXAttributeValues keeps only attributes declared by the selected
+// OLX category and prevents a request that OLX will reject with a generic 422.
+func validateAndMapOLXAttributeValues(attributes []OLXCategoryAttribute, values map[string]string) ([]olxListingAttributeValue, error) {
 	if len(attributes) == 0 || len(values) == 0 {
-		return nil
+		for _, attribute := range attributes {
+			if attribute.Required {
+				return nil, fmt.Errorf("obavezni atribut %q nije izabran", attributeLabel(attribute))
+			}
+		}
+		return nil, nil
 	}
 
 	lookup := make(map[string]OLXCategoryAttribute, len(attributes)*2)
+	lookupByID := make(map[int]OLXCategoryAttribute, len(attributes))
 	for _, attribute := range attributes {
+		lookupByID[attribute.ID] = attribute
 		if trimmed := strings.TrimSpace(attribute.Name); trimmed != "" {
 			lookup[strings.ToLower(trimmed)] = attribute
 		}
@@ -621,11 +650,19 @@ func mapOLXAttributeValues(attributes []OLXCategoryAttribute, values map[string]
 		}
 
 		attribute, ok := lookup[strings.ToLower(strings.TrimSpace(key))]
+		if !ok {
+			if attributeID, parseErr := strconv.Atoi(strings.TrimSpace(key)); parseErr == nil {
+				attribute, ok = lookupByID[attributeID]
+			}
+		}
 		if !ok || attribute.ID == 0 {
 			continue
 		}
 		if _, exists := added[attribute.ID]; exists {
 			continue
+		}
+		if len(attribute.Options) > 0 && !isOLXAttributeOption(attribute.Options, trimmedValue) {
+			return nil, fmt.Errorf("atribut %q ima nedozvoljenu vrijednost %q (dozvoljeno: %s)", attributeLabel(attribute), trimmedValue, strings.Join(attribute.Options, ", "))
 		}
 
 		added[attribute.ID] = struct{}{}
@@ -639,7 +676,31 @@ func mapOLXAttributeValues(attributes []OLXCategoryAttribute, values map[string]
 		return result[left].ID < result[right].ID
 	})
 
-	return result
+	for _, attribute := range attributes {
+		if attribute.Required {
+			if _, ok := added[attribute.ID]; !ok {
+				return nil, fmt.Errorf("obavezni atribut %q nije izabran", attributeLabel(attribute))
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func attributeLabel(attribute OLXCategoryAttribute) string {
+	if displayName := strings.TrimSpace(attribute.DisplayName); displayName != "" {
+		return displayName
+	}
+	return strings.TrimSpace(attribute.Name)
+}
+
+func isOLXAttributeOption(options []string, value string) bool {
+	for _, option := range options {
+		if strings.TrimSpace(option) == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *OLXCategoryService) CreateListing(ctx context.Context, payload olxCreateListingRequest) (int, error) {

@@ -20,17 +20,18 @@ import (
 )
 
 const (
-	loginConfigURL                = "https://thevukic.github.io/ICAIL/login.json"
-	authCookieName                = "icai_session"
-	authRememberDuration          = 30 * 24 * time.Hour
-	authSessionDuration           = 8 * time.Hour
-	authValidationInterval        = 20 * time.Second
-	authOfflineGracePeriod        = 10 * time.Minute
-	authSaltSize                  = 16
-	authArgonTime          uint32 = 3
-	authArgonMemory        uint32 = 64 * 1024
-	authArgonThreads       uint8  = 4
-	authArgonKeyBytes      uint32 = 32
+	loginConfigURL                  = "https://thevukic.github.io/ICAIL/login.json"
+	authCookieName                  = "asi_session"
+	authRememberDuration            = 30 * 24 * time.Hour
+	authSessionDuration             = 8 * time.Hour
+	authValidationInterval          = 20 * time.Second
+	remoteUsersCacheDuration        = 2 * time.Minute
+	authOfflineGracePeriod          = 10 * time.Minute
+	authSaltSize                    = 16
+	authArgonTime            uint32 = 3
+	authArgonMemory          uint32 = 64 * 1024
+	authArgonThreads         uint8  = 4
+	authArgonKeyBytes        uint32 = 32
 )
 
 type pepperConfig struct {
@@ -82,6 +83,10 @@ type AuthManager struct {
 
 	mu       sync.RWMutex
 	sessions map[string]appSession
+
+	remoteUsersMu       sync.Mutex
+	cachedRemoteUsers   []remoteLoginUser
+	remoteUsersCachedAt time.Time
 }
 
 func NewAuthManager(searchRoots []string) *AuthManager {
@@ -144,6 +149,15 @@ func (m *AuthManager) loadPepper() (string, error) {
 }
 
 func (m *AuthManager) fetchRemoteUsers(ctx context.Context) ([]remoteLoginUser, error) {
+	// Several protected browser requests arrive together when a catalog is opened.
+	// Reuse one recent download instead of making every request wait on GitHub.
+	m.remoteUsersMu.Lock()
+	defer m.remoteUsersMu.Unlock()
+
+	if len(m.cachedRemoteUsers) > 0 && time.Since(m.remoteUsersCachedAt) < remoteUsersCacheDuration {
+		return cloneRemoteUsers(m.cachedRemoteUsers), nil
+	}
+
 	logEvent("auth", "fetching remote users", map[string]any{
 		"url": loginConfigURL,
 	})
@@ -170,7 +184,15 @@ func (m *AuthManager) fetchRemoteUsers(ctx context.Context) ([]remoteLoginUser, 
 	logEvent("auth", "remote users fetched", map[string]any{
 		"user_count": len(payload.Users),
 	})
-	return payload.Users, nil
+	m.cachedRemoteUsers = cloneRemoteUsers(payload.Users)
+	m.remoteUsersCachedAt = time.Now()
+	return cloneRemoteUsers(payload.Users), nil
+}
+
+func cloneRemoteUsers(users []remoteLoginUser) []remoteLoginUser {
+	cloned := make([]remoteLoginUser, len(users))
+	copy(cloned, users)
+	return cloned
 }
 
 func (m *AuthManager) VerifyLogin(ctx context.Context, username, password string) (remoteLoginUser, error) {

@@ -1,4 +1,4 @@
-export const APP_TITLE = "ICAI";
+export const APP_TITLE = "ASI";
 
 export function renderAppBrand(extraContent = ""): string {
   return `

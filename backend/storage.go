@@ -17,25 +17,25 @@ import (
 )
 
 type CatalogStore struct {
-	mu              sync.RWMutex
-	tempDir         string
-	catalogs        []UploadedCatalog
-	categorizations map[string]ItemCategorySelection
+	mu               sync.RWMutex
+	tempDir          string
+	catalogs         []UploadedCatalog
+	categorizations  map[string]ItemCategorySelection
 	pendingPublishes map[string]CatalogItem
 }
 
 var errCatalogAlreadyUploaded = errors.New("fajl je već dodat")
 
 func NewCatalogStore() (*CatalogStore, error) {
-	tempDir, err := os.MkdirTemp("", "icai-*")
+	tempDir, err := os.MkdirTemp("", "asi-*")
 	if err != nil {
 		return nil, fmt.Errorf("nije moguće kreirati temp folder: %w", err)
 	}
 
 	store := &CatalogStore{
-		tempDir:         tempDir,
-		catalogs:        []UploadedCatalog{},
-		categorizations: map[string]ItemCategorySelection{},
+		tempDir:          tempDir,
+		catalogs:         []UploadedCatalog{},
+		categorizations:  map[string]ItemCategorySelection{},
 		pendingPublishes: map[string]CatalogItem{},
 	}
 
@@ -64,8 +64,6 @@ func (s *CatalogStore) buildStateLocked() CatalogState {
 	copy(catalogs, s.catalogs)
 
 	items := make([]CatalogItem, 0)
-	seen := make(map[string]struct{})
-
 	var lastUpdated *time.Time
 	for _, catalog := range catalogs {
 		for _, item := range catalog.Items {
@@ -73,12 +71,7 @@ func (s *CatalogStore) buildStateLocked() CatalogState {
 			if _, hidden := s.pendingPublishes[item.SelectionKey]; hidden {
 				continue
 			}
-			key := item.TowKod + "|" + item.Index
-			if _, exists := seen[key]; exists {
-				continue
-			}
-			seen[key] = struct{}{}
-			if categorization, ok := s.categorizations[item.TowKod]; ok {
+			if categorization, ok := s.categorizations[item.ItemID]; ok {
 				copied := categorization
 				item.Categorization = &copied
 			}
@@ -102,7 +95,7 @@ func (s *CatalogStore) buildStateLocked() CatalogState {
 }
 
 func catalogItemSelectionKey(item CatalogItem) string {
-	return strings.TrimSpace(item.SourceCatalogID) + "|" + strings.TrimSpace(item.TowKod) + "|" + strings.TrimSpace(item.Index)
+	return strings.TrimSpace(item.ItemID)
 }
 
 type catalogSelectionTargets struct {
@@ -169,7 +162,7 @@ func (s *CatalogStore) ReserveItemsForPublish(itemKeys []string, towKods []strin
 			}
 
 			itemCopy := item
-			if categorization, ok := s.categorizations[item.TowKod]; ok {
+			if categorization, ok := s.categorizations[item.ItemID]; ok {
 				copied := categorization
 				itemCopy.Categorization = &copied
 			}
@@ -259,6 +252,7 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 	catalogID := generateID()
 	items := make([]CatalogItem, 0, len(payload.Items))
 	for _, item := range payload.Items {
+		item.ItemID = generateID()
 		item.SourceCatalogID = catalogID
 		item.SourceFileName = header.Filename
 		items = append(items, item)
@@ -271,6 +265,9 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 		UploadedAt: time.Now(),
 		TotalItems: len(items),
 		Items:      items,
+	}
+	if err := s.writeCatalogFile(catalog); err != nil {
+		return UploadedCatalog{}, fmt.Errorf("nije moguće sačuvati interne ID-jeve artikala: %w", err)
 	}
 
 	s.catalogs = append(s.catalogs, catalog)
@@ -442,7 +439,7 @@ func (s *CatalogStore) WriteExportZIP(w io.Writer, itemKeys []string, towKods []
 		return "", fmt.Errorf("artikli nisu pronađeni")
 	}
 
-	archiveName := "ICAI-" + time.Now().Format("20060102-150405") + ".zip"
+	archiveName := "ASI-" + time.Now().Format("20060102-150405") + ".zip"
 	zipWriter := zip.NewWriter(w)
 
 	exportPayload := CatalogPayload{
@@ -645,7 +642,7 @@ func (s *CatalogStore) Clear() error {
 	return nil
 }
 
-func (s *CatalogStore) SaveCategorization(towKod string, selection ItemCategorySelection) (CatalogItem, error) {
+func (s *CatalogStore) SaveCategorization(itemID string, selection ItemCategorySelection) (CatalogItem, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -656,12 +653,12 @@ func (s *CatalogStore) SaveCategorization(towKod string, selection ItemCategoryS
 	for catalogIndex := range s.catalogs {
 		catalog := &s.catalogs[catalogIndex]
 		for itemIndex := range catalog.Items {
-			if catalog.Items[itemIndex].TowKod != towKod {
+			if catalog.Items[itemIndex].ItemID != itemID {
 				continue
 			}
 
 			copied := selection
-			s.categorizations[towKod] = selection
+			s.categorizations[itemID] = selection
 			catalog.Items[itemIndex].Categorization = &copied
 
 			if err := s.writeCatalogFile(*catalog); err != nil {
@@ -673,13 +670,13 @@ func (s *CatalogStore) SaveCategorization(towKod string, selection ItemCategoryS
 			logEvent("category", "single item categorization persisted", map[string]any{
 				"catalog_id":  catalog.ID,
 				"category_id": selection.Category.ID,
-				"tow_kod":     towKod,
+				"item_id":     itemID,
 			})
 			return itemCopy, nil
 		}
 	}
 
-	return CatalogItem{}, fmt.Errorf("%w: %s", errCatalogItemNotFound, towKod)
+	return CatalogItem{}, fmt.Errorf("%w: %s", errCatalogItemNotFound, itemID)
 }
 
 func (s *CatalogStore) SaveCategorizationBulk(itemKeys []string, towKods []string, selection ItemCategorySelection) ([]CatalogItem, error) {
@@ -708,7 +705,7 @@ func (s *CatalogStore) SaveCategorizationBulk(itemKeys []string, towKods []strin
 			}
 
 			copied := selection
-			s.categorizations[item.TowKod] = selection
+			s.categorizations[item.ItemID] = selection
 			item.Categorization = &copied
 
 			itemCopy := *item

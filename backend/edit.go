@@ -13,7 +13,7 @@ import (
 var errCatalogItemNotFound = errors.New("artikal nije pronađen")
 
 func (a *App) handleCatalogItem(w http.ResponseWriter, r *http.Request) {
-	towKod, err := itemCodeFromPath(strings.TrimPrefix(r.URL.Path, "/api/catalog/item"))
+	itemID, err := itemIDFromPath(strings.TrimPrefix(r.URL.Path, "/api/catalog/item"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -21,7 +21,7 @@ func (a *App) handleCatalogItem(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		item, getErr := a.store.GetItemByTowKod(towKod)
+		item, getErr := a.store.GetItemByID(itemID)
 		if getErr != nil {
 			if errors.Is(getErr, errCatalogItemNotFound) {
 				writeError(w, http.StatusNotFound, getErr.Error())
@@ -38,7 +38,7 @@ func (a *App) handleCatalogItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		item, updateErr := a.store.UpdateItemByTowKod(towKod, req)
+		item, updateErr := a.store.UpdateItemByID(itemID, req)
 		if updateErr != nil {
 			if errors.Is(updateErr, errCatalogItemNotFound) {
 				writeError(w, http.StatusNotFound, updateErr.Error())
@@ -50,7 +50,7 @@ func (a *App) handleCatalogItem(w http.ResponseWriter, r *http.Request) {
 
 		logEvent("catalog", "single item updated", map[string]any{
 			"price":   item.RetailPrice,
-			"tow_kod": towKod,
+			"item_id": itemID,
 		})
 		writeJSON(w, http.StatusOK, item)
 	default:
@@ -106,7 +106,7 @@ func (a *App) handleCatalogBulkDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.store.State())
 }
 
-func itemCodeFromPath(path string) (string, error) {
+func itemIDFromPath(path string) (string, error) {
 	const prefix = "/"
 
 	if !strings.HasPrefix(path, prefix) {
@@ -116,25 +116,25 @@ func itemCodeFromPath(path string) (string, error) {
 	rawCode := strings.TrimPrefix(path, prefix)
 	rawCode = strings.Trim(rawCode, "/")
 	if rawCode == "" {
-		return "", fmt.Errorf("towKod je obavezan")
+		return "", fmt.Errorf("ID artikla je obavezan")
 	}
 
 	code, err := url.PathUnescape(rawCode)
 	if err != nil {
-		return "", fmt.Errorf("towKod nije validan")
+		return "", fmt.Errorf("ID artikla nije validan")
 	}
 
 	return code, nil
 }
 
-func (s *CatalogStore) GetItemByTowKod(towKod string) (CatalogItem, error) {
+func (s *CatalogStore) GetItemByID(itemID string) (CatalogItem, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for _, catalog := range s.catalogs {
 		for _, item := range catalog.Items {
-			if item.TowKod == towKod {
-				if categorization, ok := s.categorizations[towKod]; ok {
+			if item.ItemID == itemID {
+				if categorization, ok := s.categorizations[itemID]; ok {
 					copied := categorization
 					item.Categorization = &copied
 				}
@@ -143,10 +143,10 @@ func (s *CatalogStore) GetItemByTowKod(towKod string) (CatalogItem, error) {
 		}
 	}
 
-	return CatalogItem{}, fmt.Errorf("%w: %s", errCatalogItemNotFound, towKod)
+	return CatalogItem{}, fmt.Errorf("%w: %s", errCatalogItemNotFound, itemID)
 }
 
-func (s *CatalogStore) UpdateItemByTowKod(towKod string, req CatalogItemEditRequest) (CatalogItem, error) {
+func (s *CatalogStore) UpdateItemByID(itemID string, req CatalogItemEditRequest) (CatalogItem, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -162,7 +162,7 @@ func (s *CatalogStore) UpdateItemByTowKod(towKod string, req CatalogItemEditRequ
 	for catalogIndex := range s.catalogs {
 		catalog := &s.catalogs[catalogIndex]
 		for itemIndex := range catalog.Items {
-			if catalog.Items[itemIndex].TowKod != towKod {
+			if catalog.Items[itemIndex].ItemID != itemID {
 				continue
 			}
 
@@ -178,7 +178,7 @@ func (s *CatalogStore) UpdateItemByTowKod(towKod string, req CatalogItemEditRequ
 		}
 	}
 
-	return CatalogItem{}, fmt.Errorf("%w: %s", errCatalogItemNotFound, towKod)
+	return CatalogItem{}, fmt.Errorf("%w: %s", errCatalogItemNotFound, itemID)
 }
 
 func (s *CatalogStore) writeCatalogFile(catalog UploadedCatalog) error {
@@ -192,31 +192,10 @@ func (s *CatalogStore) writeCatalogFile(catalog UploadedCatalog) error {
 		return fmt.Errorf("nije moguće parsirati temp fajl: %w", err)
 	}
 
-	currentItems := make(map[string]CatalogItem, len(catalog.Items))
-	for _, item := range catalog.Items {
-		currentItems[item.TowKod] = item
-	}
-
-	nextPayloadItems := make([]CatalogItem, 0, len(catalog.Items))
-	for itemIndex := range payload.Items {
-		currentItem, ok := currentItems[payload.Items[itemIndex].TowKod]
-		if !ok {
-			continue
-		}
-
-		payload.Items[itemIndex].NameB2B = currentItem.NameB2B
-		payload.Items[itemIndex].RetailPrice = currentItem.RetailPrice
-		payload.Items[itemIndex].TechnicalDescription = currentItem.TechnicalDescription
-		payload.Items[itemIndex].Categorization = currentItem.Categorization
-		nextPayloadItems = append(nextPayloadItems, payload.Items[itemIndex])
-	}
-
-	if len(nextPayloadItems) == 0 {
-		return fmt.Errorf("artikal nije pronađen u temp fajlu")
-	}
-
-	payload.Items = nextPayloadItems
-	payload.TotalItems = len(nextPayloadItems)
+	// Catalog rows are matched only by their application-generated ItemID.
+	// Rebuilding this list by TowKod or Index would merge distinct products.
+	payload.Items = catalog.Items
+	payload.TotalItems = len(catalog.Items)
 
 	output, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
@@ -337,7 +316,7 @@ func (s *CatalogStore) DeleteItemsBulk(itemKeys []string, towKods []string) erro
 			if targets.Match(item) {
 				deletedCount++
 				removedFromCatalog = true
-				delete(s.categorizations, item.TowKod)
+				delete(s.categorizations, item.ItemID)
 				delete(s.pendingPublishes, item.SelectionKey)
 				continue
 			}

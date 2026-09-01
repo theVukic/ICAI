@@ -23,6 +23,40 @@ type applicationLogger struct {
 	eventLog    *log.Logger
 }
 
+const (
+	terminalColorReset  = "\x1b[0m"
+	terminalColorRed    = "\x1b[31m"
+	terminalColorGreen  = "\x1b[32m"
+	terminalColorYellow = "\x1b[33m"
+	terminalColorWhite  = "\x1b[97m"
+)
+
+type terminalLogWriter struct {
+	mu       sync.Mutex
+	terminal io.Writer
+	file     io.Writer
+}
+
+func (w *terminalLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.file != nil {
+		if _, err := w.file.Write(p); err != nil {
+			return 0, err
+		}
+	}
+
+	if w.terminal != nil {
+		color := terminalLogColor(string(p))
+		if _, err := fmt.Fprintf(w.terminal, "%s%s%s", color, p, terminalColorReset); err != nil {
+			return 0, err
+		}
+	}
+
+	return len(p), nil
+}
+
 type clientLogEvent struct {
 	Level     string         `json:"level"`
 	Category  string         `json:"category"`
@@ -64,13 +98,46 @@ func newApplicationLogger(searchRoots []string) (*applicationLogger, error) {
 		return nil, fmt.Errorf("ne mogu otvoriti session log: %w", err)
 	}
 
+	output := &terminalLogWriter{
+		terminal: os.Stdout,
+		file:     sessionFile,
+	}
+
 	return &applicationLogger{
 		logDir:      logDir,
 		sessionFile: sessionFile,
 		sessionPath: sessionPath,
-		appLog:      log.New(io.MultiWriter(os.Stdout, sessionFile), "", 0),
-		eventLog:    log.New(io.MultiWriter(os.Stdout, sessionFile), "", 0),
+		appLog:      log.New(output, "", 0),
+		eventLog:    log.New(output, "", 0),
 	}, nil
+}
+
+func terminalLogColor(message string) string {
+	lowerMessage := strings.ToLower(message)
+
+	switch {
+	case strings.Contains(lowerMessage, "[error]"),
+		strings.Contains(lowerMessage, " failed"),
+		strings.Contains(lowerMessage, "error="),
+		strings.Contains(lowerMessage, "rejected"),
+		strings.Contains(lowerMessage, "nije uspeo"),
+		strings.Contains(lowerMessage, "nije uspio"):
+		return terminalColorRed
+	case strings.Contains(lowerMessage, "warning"),
+		strings.Contains(lowerMessage, "retry"),
+		strings.Contains(lowerMessage, "skipping"),
+		strings.Contains(lowerMessage, "privremeno"):
+		return terminalColorYellow
+	case strings.Contains(lowerMessage, " success"),
+		strings.Contains(lowerMessage, " completed"),
+		strings.Contains(lowerMessage, " published"),
+		strings.Contains(lowerMessage, " uploaded"),
+		strings.Contains(lowerMessage, " saved"),
+		strings.Contains(lowerMessage, " created"):
+		return terminalColorGreen
+	default:
+		return terminalColorWhite
+	}
 }
 
 func (l *applicationLogger) appWriter() io.Writer {
@@ -152,7 +219,7 @@ func resolveLogDirectory(searchRoots []string) (string, error) {
 }
 
 func sessionLogFileName(now time.Time) string {
-	return "icai-session-" + now.Format("2006-01-02_15-04-05") + ".log"
+	return "asi-session-" + now.Format("2006-01-02_15-04-05") + ".log"
 }
 
 func formatLogFields(fields map[string]any) string {

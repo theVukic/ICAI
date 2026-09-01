@@ -19,6 +19,9 @@ type CatalogPayload struct {
 }
 
 type CatalogItem struct {
+	// ItemID is generated when a catalog is imported and is the application's
+	// stable identity for this row, independent of supplier fields.
+	ItemID               string                 `json:"itemId"`
 	SelectionKey         string                 `json:"selectionKey,omitempty"`
 	TowKod               string                 `json:"towKod"`
 	Index                string                 `json:"index"`
@@ -159,13 +162,15 @@ type OLXCategorySuggestion struct {
 }
 
 type SessionInfoResponse struct {
-	TokenConfigured bool   `json:"tokenConfigured"`
-	Username        string `json:"username"`
-	FullName        string `json:"fullName"`
-	ProfileName     string `json:"profileName,omitempty"`
-	Authenticated   bool   `json:"authenticated"`
-	AppUsername     string `json:"appUsername,omitempty"`
-	AppRole         string `json:"appRole,omitempty"`
+	TokenConfigured bool     `json:"tokenConfigured"`
+	Username        string   `json:"username"`
+	FullName        string   `json:"fullName"`
+	ProfileName     string   `json:"profileName,omitempty"`
+	UserType        string   `json:"userType,omitempty"`
+	IsShop          bool     `json:"isShop"`
+	Authenticated   bool     `json:"authenticated"`
+	AppUsername     string   `json:"appUsername,omitempty"`
+	AppRole         string   `json:"appRole,omitempty"`
 	AvailableTokens []string `json:"availableTokens,omitempty"`
 }
 
@@ -222,7 +227,7 @@ type DescriptionRenderResponse struct {
 
 type CatalogPublishRequest struct {
 	SelectedItemKeys []string `json:"selectedItemKeys,omitempty"`
-	SelectedTowKods []string `json:"selectedTowKods"`
+	SelectedTowKods  []string `json:"selectedTowKods"`
 }
 
 type PublishedListingResult struct {

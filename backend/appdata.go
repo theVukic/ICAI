@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const appDataFolderName = "ICAIapp"
+const appDataFolderName = "ASIapp"
 
 type appStoragePaths struct {
 	RootDir        string

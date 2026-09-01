@@ -12,15 +12,53 @@ function ErrorMsg($msg) {
     Write-Host "[ERROR] $msg" -ForegroundColor Red
 }
 
+function Sign-AppExecutable($path) {
+    $maxAttempts = 5
+
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        $signOutput = @(& $signtool sign `
+            /tr http://timestamp.digicert.com `
+            /td sha256 `
+            /fd sha256 `
+            /f $certPath `
+            /p $certPassword `
+            $path 2>&1)
+        $exitCode = $LASTEXITCODE
+        $signMessage = ($signOutput | Out-String).Trim()
+
+        if ($signMessage) {
+            Write-Host $signMessage
+        }
+
+        if ($exitCode -eq 0) {
+            return
+        }
+
+        if ($signMessage -notmatch "being used by another process") {
+            throw "Code signing failed: $signMessage"
+        }
+
+        if ($attempt -eq $maxAttempts) {
+            throw "Code signing failed after $maxAttempts attempts: $signMessage"
+        }
+
+        $delaySeconds = $attempt * 2
+        Log "ASI.exe is temporarily locked; retrying code signing in $delaySeconds seconds (attempt $($attempt + 1)/$maxAttempts)"
+        Start-Sleep -Seconds $delaySeconds
+    }
+}
+
 $rootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $frontendDir = Join-Path $rootDir "frontend"
 $backendDir = Join-Path $rootDir "backend"
 $appDir = Join-Path $rootDir "app"
 $appDistDir = Join-Path $appDir "dist"
-$appExePath = Join-Path $appDir "ICAI.exe"
+$appExePath = Join-Path $appDir "ASI.exe"
 $legacyAppExePath = Join-Path $appDir "app.exe"
-$backendExePath = Join-Path $backendDir "ICAI.exe"
+$previousAppExePath = Join-Path $appDir "ICAI.exe"
+$backendExePath = Join-Path $backendDir "ASI.exe"
 $legacyBackendExePath = Join-Path $backendDir "backend.exe"
+$previousBackendExePath = Join-Path $backendDir "ICAI.exe"
 $iconPath = Join-Path $backendDir "icon.png"
 $goWinResPath = Join-Path $env:USERPROFILE "go\bin\go-winres.exe"
 $certPath = Join-Path $rootDir "certs\ICAIcert.pfx"
@@ -89,11 +127,17 @@ try {
     if (Test-Path $legacyAppExePath) {
         Remove-Item -Force $legacyAppExePath
     }
+    if (Test-Path $previousAppExePath) {
+        Remove-Item -Force $previousAppExePath
+    }
     if (Test-Path $backendExePath) {
         Remove-Item -Force $backendExePath
     }
     if (Test-Path $legacyBackendExePath) {
         Remove-Item -Force $legacyBackendExePath
+    }
+    if (Test-Path $previousBackendExePath) {
+        Remove-Item -Force $previousBackendExePath
     }
 
     Log "Generating Windows resources from app icon"
@@ -101,14 +145,14 @@ try {
     & $goWinResPath simply `
         --arch amd64 `
         --icon $iconPath `
-        --product-name "ICAI" `
-        --file-description "ICAI desktop application" `
-        --original-filename "ICAI.exe"
+        --product-name "ASI" `
+        --file-description "ASI desktop application" `
+        --original-filename "ASI.exe"
     if ($LASTEXITCODE -ne 0) {
         throw "Windows resource generation failed"
     }
 
-    Log "Building Go executable to app/ICAI.exe with release flags"
+    Log "Building Go executable to app/ASI.exe with release flags"
     & go @goBuildArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Go build failed"
@@ -116,18 +160,8 @@ try {
     Pop-Location
     Success "Executable built: $appExePath"
 
-    Log "Signing ICAI.exe"
-    & $signtool sign `
-        /tr http://timestamp.digicert.com `
-        /td sha256 `
-        /fd sha256 `
-        /f $certPath `
-        /p $certPassword `
-        $appExePath
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Code signing failed"
-    }
+    Log "Signing ASI.exe"
+    Sign-AppExecutable $appExePath
 
     Success "Executable signed successfully"
     Success "Build process finished successfully"

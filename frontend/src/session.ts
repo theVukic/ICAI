@@ -8,6 +8,8 @@ type SessionInfo = {
   appUsername?: string;
   appRole?: string;
   profileName?: string;
+  userType?: string;
+  isShop?: boolean;
   availableTokens?: string[];
 };
 
@@ -226,6 +228,7 @@ export function renderSessionBadge(session: SessionInfo | null): string {
     <div class="session-badge">
       <span>OLX</span>
       <strong>${escapeHtml(session.username)}</strong>
+      ${session.isShop ? '<em>Shop</em>' : ''}
     </div>
   `;
 }

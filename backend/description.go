@@ -54,7 +54,7 @@ func (a *App) handleDescriptionRender(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	towKod, err := itemCodeFromPath(strings.TrimPrefix(r.URL.Path, "/api/description/render"))
+	itemID, err := itemIDFromPath(strings.TrimPrefix(r.URL.Path, "/api/description/render"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -66,7 +66,7 @@ func (a *App) handleDescriptionRender(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	item, getErr := a.store.GetItemByTowKod(towKod)
+	item, getErr := a.store.GetItemByID(itemID)
 	if getErr != nil {
 		writeError(w, http.StatusBadRequest, getErr.Error())
 		return
@@ -74,12 +74,12 @@ func (a *App) handleDescriptionRender(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, DescriptionRenderResponse{
 		ProfileName: document.ProfileName,
-		TowKod:      towKod,
+		TowKod:      item.TowKod,
 		Content:     renderDescriptionTemplate(document.Content, item),
 	})
 	logEvent("description", "description rendered", map[string]any{
 		"profile_name": document.ProfileName,
-		"tow_kod":      towKod,
+		"item_id":      itemID,
 	})
 }
 

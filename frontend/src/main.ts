@@ -32,7 +32,8 @@ type CatalogStatus = {
 };
 
 type CatalogItem = {
-  selectionKey?: string;
+	itemId: string;
+	selectionKey?: string;
   towKod: string;
   index: string;
   nameB2B: string;
@@ -52,7 +53,7 @@ type CatalogItem = {
 };
 
 function getItemSelectionKey(item: CatalogItem): string {
-  return item.selectionKey || `${item.towKod || ""}|${item.index || ""}`;
+	return item.itemId;
 }
 
 type UploadedCatalog = {
@@ -108,12 +109,12 @@ type PublishOptimisticSnapshot = {
   selectionPulseTowKods: string[];
 };
 
-const VIEW_MODE_STORAGE_KEY = "icaiapp:view-mode";
-const SORT_MODE_STORAGE_KEY = "icaiapp:sort-mode";
-const SELECTION_MODE_STORAGE_KEY = "icaiapp:selection-mode";
-const SELECT_ALL_STORAGE_KEY = "icaiapp:select-all";
-const SELECTED_TOWKODS_STORAGE_KEY = "icaiapp:selected-towkods";
-const MAIN_SCROLL_TOP_STORAGE_KEY = "icaiapp:main-scroll-top";
+const VIEW_MODE_STORAGE_KEY = "asiapp:view-mode";
+const SORT_MODE_STORAGE_KEY = "asiapp:sort-mode";
+const SELECTION_MODE_STORAGE_KEY = "asiapp:selection-mode";
+const SELECT_ALL_STORAGE_KEY = "asiapp:select-all";
+const SELECTED_TOWKODS_STORAGE_KEY = "asiapp:selected-towkods";
+const MAIN_SCROLL_TOP_STORAGE_KEY = "asiapp:main-scroll-top";
 const AUTH_POLL_INTERVAL_MS = 600000;
 
 type SortMode = "price-asc" | "price-desc" | "name" | "brand" | "publish-ready";
@@ -136,6 +137,7 @@ const root = app;
 installGlobalClientLogging();
 mountPageTransition(root);
 let authPollTimer: number | null = null;
+let loadStateInFlight: Promise<void> | null = null;
 
 const notyf = new Notyf({
   duration: 0,
@@ -581,10 +583,10 @@ function render(): void {
             <div class="product-line bottom">
               <strong>${price}</strong>
               <div class="card-actions">
-                <button class="icon-button ${hasCategorization ? "category-button-complete" : "category-button-missing"}" type="button" aria-label="Kategorizacija" data-category-code="${escapeHtml(item.towKod)}">
+                <button class="icon-button ${hasCategorization ? "category-button-complete" : "category-button-missing"}" type="button" aria-label="Kategorizacija" data-category-code="${escapeHtml(item.itemId)}">
                   ${categorizeIcon}
                 </button>
-                <button class="icon-button" type="button" aria-label="Promjeni" data-edit-code="${escapeHtml(item.towKod)}">
+                <button class="icon-button" type="button" aria-label="Promjeni" data-edit-code="${escapeHtml(item.itemId)}">
                   ${editIcon}
                 </button>
               </div>
@@ -1427,6 +1429,17 @@ function bindEvents(): void {
 }
 
 async function loadState(): Promise<void> {
+	if (loadStateInFlight) {
+		return loadStateInFlight;
+	}
+
+	loadStateInFlight = loadStateOnce().finally(() => {
+		loadStateInFlight = null;
+	});
+	return loadStateInFlight;
+}
+
+async function loadStateOnce(): Promise<void> {
   try {
     const session = await loadSessionInfo();
     state.sessionUsername = session.username || "";
@@ -1469,7 +1482,6 @@ async function loadState(): Promise<void> {
       state.data = nextData;
       state.imageIndexes = {};
       reconcileSelectionState();
-      scheduleCategoryPrefetch(state.data.items);
     }
     if (
       !state.isUploading &&
@@ -1826,7 +1838,6 @@ async function uploadFiles(files: File[]): Promise<void> {
       }
     }
     reconcileSelectionState();
-    scheduleCategoryPrefetch(state.data.items);
     state.animateItemsIn = true;
     state.message = "Artikli su dodati.";
     state.messageTone = "success";
@@ -1962,7 +1973,7 @@ async function exportCatalogArchive(): Promise<void> {
   const blob = await response.blob();
   const suggestedName =
     getSuggestedExportFileName(response.headers.get("Content-Disposition")) ||
-    `ICAI-${buildExportTimestamp()}.zip`;
+    `ASI-${buildExportTimestamp()}.zip`;
   await saveBlobWithPicker(blob, suggestedName);
 }
 
@@ -2043,21 +2054,6 @@ function handleOlxTokenMenuOutsideClick(): void {
   render();
 }
 
-function scheduleCategoryPrefetch(items: CatalogItem[]): void {
-  const towKods = items
-    .map((item) => item.towKod)
-    .filter((towKod): towKod is string => Boolean(towKod));
-
-  if (towKods.length === 0) {
-    return;
-  }
-
-  const uniqueTowKods = [...new Set(towKods)];
-  for (const towKod of uniqueTowKods) {
-    void prefetchCategoryPage(towKod);
-  }
-}
-
 function getPublishCandidateTowKods(): string[] {
   const hasSelection = state.selectedTowKods.length > 0;
   const selectedSet = new Set(state.selectedTowKods);
@@ -2114,7 +2110,6 @@ async function reloadStateAfterPublishFailure(
   try {
     await syncCatalogStateFromBackend();
     restorePublishSnapshot(snapshot);
-    scheduleCategoryPrefetch(state.data.items);
     state.message = "Objava nije uspela. Artikli su vraceni na stranicu.";
     state.messageTone = "danger";
     return true;

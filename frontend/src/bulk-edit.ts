@@ -3,7 +3,7 @@ import { renderPublishSessionBadge } from "./publish-session";
 import { renderSessionBadge } from "./session";
 import { renderAppBrand } from "./branding";
 
-const SELECTED_TOWKODS_STORAGE_KEY = "icaiapp:selected-towkods";
+const SELECTED_TOWKODS_STORAGE_KEY = "asiapp:selected-towkods";
 
 const backIcon = `
   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -34,7 +34,8 @@ type CatalogStatus = {
 };
 
 type CatalogItem = {
-  selectionKey?: string;
+	itemId: string;
+	selectionKey?: string;
   towKod: string;
   index: string;
   nameB2B: string;
@@ -48,7 +49,7 @@ type CatalogItem = {
 };
 
 function getItemSelectionKey(item: CatalogItem): string {
-  return item.selectionKey || `${item.towKod || ""}|${item.index || ""}`;
+	return item.itemId;
 }
 
 type UploadedCatalog = {
