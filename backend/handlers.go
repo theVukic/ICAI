@@ -19,7 +19,9 @@ func (a *App) handleCatalogState(w http.ResponseWriter, r *http.Request) {
 		"items": a.store.State().TotalItems,
 		"files": a.store.State().TotalFiles,
 	})
-	writeJSON(w, http.StatusOK, a.store.State())
+	state := a.store.State()
+	a.decorateImageProcessingState(&state.ImageProcessing)
+	writeJSON(w, http.StatusOK, state)
 }
 
 func (a *App) handleCatalogUpload(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +68,9 @@ func (a *App) handleCatalogUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state := a.store.State()
+	if a.imageProcessingIsEnabled() {
+		a.enqueueUnprocessedImages()
+	}
 	if len(skippedDuplicates) > 0 {
 		logEvent("catalog", "duplicate upload skipped", map[string]any{
 			"duplicate_count": len(skippedDuplicates),
@@ -73,11 +78,34 @@ func (a *App) handleCatalogUpload(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	logEvent("catalog", "upload completed", map[string]any{
-		"files_total":         state.TotalFiles,
-		"items_total":         state.TotalItems,
-		"skipped_duplicates":  len(skippedDuplicates),
+		"files_total":        state.TotalFiles,
+		"items_total":        state.TotalItems,
+		"skipped_duplicates": len(skippedDuplicates),
 	})
-	writeJSON(w, http.StatusCreated, a.store.State())
+	state = a.store.State()
+	a.decorateImageProcessingState(&state.ImageProcessing)
+	writeJSON(w, http.StatusCreated, state)
+}
+
+func (a *App) handleImageProcessingSettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		state := a.store.State()
+		a.decorateImageProcessingState(&state.ImageProcessing)
+		writeJSON(w, http.StatusOK, state.ImageProcessing)
+	case http.MethodPut:
+		var request ImageProcessingSettingsRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, "neispravna postavka obrade slika")
+			return
+		}
+		a.setImageProcessingEnabled(request.Enabled)
+		state := a.store.State()
+		a.decorateImageProcessingState(&state.ImageProcessing)
+		writeJSON(w, http.StatusOK, state.ImageProcessing)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (a *App) handleCatalogClear(w http.ResponseWriter, r *http.Request) {

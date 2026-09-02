@@ -71,6 +71,19 @@ type CatalogState = {
   totalFiles: number;
   totalItems: number;
   lastUpdated: string | null;
+  imageProcessing: ImageProcessingState;
+};
+
+type ImageProcessingItem = { status: "queued" | "processing" | "done" | "error"; error?: string; model?: "fast" | "detailed" };
+type ImageProcessingState = {
+  enabled: boolean;
+  aiReady: boolean;
+  aiError?: string;
+  items: Record<string, ImageProcessingItem>;
+  queued: number;
+  working: number;
+  done: number;
+  failed: number;
 };
 
 type ErrorResponse = {
@@ -192,6 +205,8 @@ const state: {
   listingLimitRemaining: number | null;
   listingLimitUnlimited: boolean;
   listingLimitLoading: boolean;
+  imageProcessingEnabled: boolean;
+  imageProcessingSynced: boolean;
   shouldRestoreMainScroll: boolean;
   refreshSuspendUntil: number;
 } = {
@@ -202,6 +217,7 @@ const state: {
     totalFiles: 0,
     totalItems: 0,
     lastUpdated: null,
+    imageProcessing: { enabled: false, aiReady: false, items: {}, queued: 0, working: 0, done: 0, failed: 0 },
   },
   isDragging: false,
   isUploading: false,
@@ -239,6 +255,8 @@ const state: {
   listingLimitRemaining: null,
   listingLimitUnlimited: false,
   listingLimitLoading: false,
+  imageProcessingEnabled: loadStoredImageProcessingEnabled(),
+  imageProcessingSynced: false,
   shouldRestoreMainScroll: false,
   refreshSuspendUntil: 0,
 };
@@ -532,6 +550,7 @@ function render(): void {
         Math.max(item.images.length - 1, 0),
       );
       const image = item.images[currentImageIndex]?.url ?? "";
+	  const processing = state.data.imageProcessing.items[item.itemId];
       const price =
         item.retailPrice > 0
           ? `${formatPriceValue(item.retailPrice)} ${escapeHtml(formatCurrencyCode(item.currencyCode || "EUR"))}`
@@ -572,6 +591,7 @@ function render(): void {
                 ? `<div class="image-count">${currentImageIndex + 1}/${item.images.length}</div>`
                 : ""
             }
+			${processing ? `<div class="image-processing-status ${escapeHtml(processing.status)}">${escapeHtml(imageProcessingLabel(processing))}</div>` : ""}
           </div>
           <div class="product-body">
             <h3>${escapeHtml(item.nameB2B || "Artikal bez naziva")}</h3>
@@ -783,6 +803,22 @@ function render(): void {
             </button>
             <span class="action-label">SACUVAJ</span>
           </div>
+          <div class="footer-image-processing-control">
+            <div class="toolbar-action footer-image-processing-action">
+              <button class="image-processing-toggle ${state.imageProcessingEnabled ? "is-active" : "is-inactive"}" id="imageProcessingButton" type="button" aria-label="${state.imageProcessingEnabled ? "Isključi uređivanje slika" : "Uključi uređivanje slika"}" aria-pressed="${state.imageProcessingEnabled}">
+                <span class="button-icon">✦</span>
+              </button>
+              <span class="action-label">AI</span>
+            </div>
+            <div class="footer-image-processing-meta" aria-live="polite">
+              <span class="ai-runtime-indicator ${state.data.imageProcessing.aiReady ? "ready" : "unavailable"}" title="${escapeHtml(state.data.imageProcessing.aiError || "Lokalni AI je spreman")}" aria-label="${state.data.imageProcessing.aiReady ? "AI spreman" : "AI nije spreman"}"><span class="ai-runtime-status" aria-hidden="true">${state.data.imageProcessing.aiReady ? "✓" : "×"}</span><span>AI</span></span>
+              ${
+                state.data.totalItems > 0
+                  ? `<span class="image-processing-progress"><strong class="${state.data.imageProcessing.done > 0 ? "is-complete" : ""}">${state.data.imageProcessing.done}</strong><span>/</span><span>${state.data.totalItems}</span></span>`
+                  : ""
+              }
+            </div>
+          </div>
         </div>
         <div class="footer-counts" aria-live="polite">
           <span class="footer-count-total">${state.data.totalItems}</span>
@@ -861,6 +897,7 @@ function bindEvents(): void {
     document.querySelector<HTMLButtonElement>("#publishButton");
   const logoutButton =
     document.querySelector<HTMLButtonElement>("#logoutButton");
+  const imageProcessingButton = document.querySelector<HTMLButtonElement>("#imageProcessingButton");
   const olxTokenTrigger =
     document.querySelector<HTMLButtonElement>("#olxTokenTrigger");
   const olxTokenMenu =
@@ -881,6 +918,30 @@ function bindEvents(): void {
   logoutButton?.addEventListener("click", async () => {
     await forceLogoutToLogin();
   });
+
+  imageProcessingButton?.addEventListener("click", async () => {
+    const enabled = !state.imageProcessingEnabled;
+    imageProcessingButton.disabled = true;
+    try {
+      const response = await fetch("/api/image-processing/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await response.json() as ImageProcessingState | ErrorResponse;
+      if (!response.ok) throw new Error("error" in data ? data.error : "Promjena obrade slika nije uspjela.");
+      state.imageProcessingEnabled = enabled;
+      state.data.imageProcessing = data as ImageProcessingState;
+      saveStoredImageProcessingEnabled(enabled);
+      state.message = enabled ? "Obrada slika je uključena." : "Obrada slika je isključena; objavljuju se originali.";
+      state.messageTone = "success";
+    } catch (error) {
+      state.message = error instanceof Error ? error.message : "Promjena obrade slika nije uspjela.";
+      state.messageTone = "danger";
+    }
+    render();
+  });
+
 
   olxTokenTrigger?.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -1455,6 +1516,17 @@ async function loadStateOnce(): Promise<void> {
       return;
     }
 
+    if (!state.imageProcessingSynced) {
+      const settingsResponse = await fetch("/api/image-processing/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: state.imageProcessingEnabled }),
+      });
+      if (settingsResponse.ok) {
+        state.imageProcessingSynced = true;
+      }
+    }
+
     state.listingLimitLoading = state.tokenConfigured;
 
     const limitsPromise = state.tokenConfigured
@@ -1473,6 +1545,7 @@ async function loadStateOnce(): Promise<void> {
     }
 
     const nextData = data as CatalogState;
+	state.imageProcessingEnabled = nextData.imageProcessing.enabled;
     applyListingLimits(await limitsPromise);
     if (
       !state.isUploading &&
@@ -1587,6 +1660,7 @@ function resetProtectedState(): void {
     totalFiles: 0,
     totalItems: 0,
     lastUpdated: null,
+    imageProcessing: { enabled: false, aiReady: false, items: {}, queued: 0, working: 0, done: 0, failed: 0 },
   };
   state.imageIndexes = {};
   state.selectedTowKods = [];
@@ -1881,6 +1955,13 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
+function imageProcessingLabel(item: ImageProcessingItem): string {
+  if (item.status === "queued") return "Čeka obradu";
+  if (item.status === "processing") return "Obrađuje se";
+  if (item.status === "done") return "Slika gotova";
+  return item.error ? `Greška: ${item.error}` : "Greška obrade";
+}
+
 function formatPriceValue(value: number): string {
   if (!Number.isFinite(value)) {
     return "0";
@@ -1900,6 +1981,18 @@ function formatCurrencyCode(value: string): string {
 function loadStoredViewMode(): "grid" | "list" {
   const storedValue = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY);
   return storedValue === "list" ? "list" : "grid";
+}
+
+function loadStoredImageProcessingEnabled(): boolean {
+  // Image editing is available by default on every fresh application start.
+  // The toggle is intentionally session-only: users can turn it off for the
+  // current run, but that choice must not disable it after restarting ASI.
+  return true;
+}
+
+function saveStoredImageProcessingEnabled(_value: boolean): void {
+  // Kept as a call site for the current-session toggle; no preference is
+  // persisted between application launches.
 }
 
 function saveViewMode(value: "grid" | "list"): void {
@@ -2431,6 +2524,14 @@ window.addEventListener(
   },
   { passive: true },
 );
+
+// Image generation runs server-side, so poll lightly only while the optional
+// feature is enabled. This keeps card statuses and the progress counter live.
+window.setInterval(() => {
+  if (state.isAuthenticated && state.imageProcessingEnabled && isMainPath()) {
+    refreshMainPageFromStore();
+  }
+}, 1500);
 
 void (async () => {
   await refreshAuthentication(true);

@@ -219,6 +219,20 @@ func (a *App) publishCatalogItems(ctx context.Context, items []CatalogItem) (Cat
 			})
 			continue
 		}
+		if a.imageProcessingIsEnabled() {
+			generatedPath, progress := a.store.ProcessedImage(item.ItemID)
+			if progress.Status != "done" || strings.TrimSpace(generatedPath) == "" {
+				reason := "obrada naslovne slike nije završena"
+				if progress.Status == "error" && strings.TrimSpace(progress.Error) != "" {
+					reason = "obrada naslovne slike nije uspjela: " + progress.Error
+				}
+				result.Failed = append(result.Failed, FailedListingResult{TowKod: item.TowKod, Title: item.NameB2B, Error: reason})
+				continue
+			}
+			// Position -1 guarantees the generated cover is uploaded first while
+			// retaining the imported first image as the second OLX image.
+			item.Images = append([]CatalogImage{{Position: -1, Path: generatedPath}}, item.Images...)
+		}
 
 		publishableJobs = append(publishableJobs, publishJob{
 			index: len(publishableJobs),

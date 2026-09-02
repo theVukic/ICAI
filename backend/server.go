@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -26,23 +27,27 @@ const (
 var preferredPorts = []int{8080, 8081, 8082, 8083, 8084, 8090}
 
 type App struct {
-	store          *CatalogStore
-	server         *http.Server
-	listener       net.Listener
-	instanceLock   net.Listener
-	distDir        string
-	runtimeURLPath string
-	baseURL        string
-	descriptionDir string
-	olxCategories  *OLXCategoryService
-	auth           *AuthManager
-	publishQueue   chan queuedPublishRequest
+	store                  *CatalogStore
+	server                 *http.Server
+	listener               net.Listener
+	instanceLock           net.Listener
+	distDir                string
+	runtimeURLPath         string
+	baseURL                string
+	descriptionDir         string
+	olxCategories          *OLXCategoryService
+	auth                   *AuthManager
+	publishQueue           chan queuedPublishRequest
+	imageProcessor         *ImageProcessor
+	imageProcessingMu      sync.RWMutex
+	imageProcessingEnabled bool
+	imageProcessingQueue   chan CatalogItem
 }
 
 type queuedPublishRequest struct {
-	ctx          context.Context
-	items         []CatalogItem
-	responseCh   chan queuedPublishResult
+	ctx        context.Context
+	items      []CatalogItem
+	responseCh chan queuedPublishResult
 }
 
 type queuedPublishResult struct {
@@ -81,7 +86,6 @@ func NewApp() (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	app := &App{
 		store:          store,
 		distDir:        distDir,
@@ -112,7 +116,9 @@ func NewApp() (*App, error) {
 			filepath.Join(workDir, "backend"),
 			workDir,
 		}),
-		publishQueue: make(chan queuedPublishRequest, 128),
+		publishQueue:         make(chan queuedPublishRequest, 128),
+		imageProcessor:       NewImageProcessor(filepath.Join(exeDir, "background"), store.TempDir(), filepath.Join(exeDir, "models")),
+		imageProcessingQueue: make(chan CatalogItem, 256),
 	}
 
 	logEvent("startup", "application paths resolved", map[string]any{
@@ -141,8 +147,69 @@ func NewApp() (*App, error) {
 	}
 
 	go app.processPublishQueue()
+	go app.processImages()
 
 	return app, nil
+}
+
+func (a *App) imageProcessingIsEnabled() bool {
+	a.imageProcessingMu.RLock()
+	defer a.imageProcessingMu.RUnlock()
+	return a.imageProcessingEnabled
+}
+
+func (a *App) setImageProcessingEnabled(enabled bool) {
+	a.imageProcessingMu.Lock()
+	a.imageProcessingEnabled = enabled
+	a.imageProcessingMu.Unlock()
+	if enabled {
+		a.enqueueUnprocessedImages()
+	}
+}
+
+func (a *App) decorateImageProcessingState(state *ImageProcessingState) {
+	if state == nil {
+		return
+	}
+	state.Enabled = a.imageProcessingIsEnabled()
+	state.AIReady, state.AIError = a.imageProcessor.AIStatus()
+}
+
+func (a *App) enqueueUnprocessedImages() {
+	for _, item := range a.store.State().Items {
+		_, progress := a.store.ProcessedImage(item.ItemID)
+		if progress.Status == "queued" || progress.Status == "processing" || progress.Status == "done" {
+			continue
+		}
+		a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "queued"})
+		select {
+		case a.imageProcessingQueue <- item:
+		default:
+			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: "red za obradu slika je pun"})
+		}
+	}
+}
+
+func (a *App) processImages() {
+	for item := range a.imageProcessingQueue {
+		if !a.imageProcessingIsEnabled() {
+			a.store.ClearImageProcessingStatus(item.ItemID)
+			continue
+		}
+		a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "processing"})
+		if len(item.Images) == 0 {
+			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: "artikal nema sliku"})
+			continue
+		}
+		result, model, err := a.imageProcessor.Compose(item.ItemID, item.Images[0], func(selectedModel string) {
+			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "processing", Model: selectedModel})
+		})
+		if err != nil {
+			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: err.Error()})
+			continue
+		}
+		a.store.SetProcessedImageWithModel(item.ItemID, result, model)
+	}
 }
 
 func (a *App) processPublishQueue() {
@@ -246,6 +313,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 		}
 		a.handleCatalogUpload(w, r)
 	})
+	protectedAPI.HandleFunc("/api/image-processing/settings", a.handleImageProcessingSettings)
 
 	protectedAPI.HandleFunc("/api/catalog/bulk-delete", a.handleCatalogBulkDelete)
 	protectedAPI.HandleFunc("/api/catalog/bulk-edit", a.handleCatalogBulkEdit)

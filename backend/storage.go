@@ -22,6 +22,8 @@ type CatalogStore struct {
 	catalogs         []UploadedCatalog
 	categorizations  map[string]ItemCategorySelection
 	pendingPublishes map[string]CatalogItem
+	processedImages  map[string]string
+	processingItems  map[string]ImageProcessingItem
 }
 
 var errCatalogAlreadyUploaded = errors.New("fajl je već dodat")
@@ -37,6 +39,8 @@ func NewCatalogStore() (*CatalogStore, error) {
 		catalogs:         []UploadedCatalog{},
 		categorizations:  map[string]ItemCategorySelection{},
 		pendingPublishes: map[string]CatalogItem{},
+		processedImages:  map[string]string{},
+		processingItems:  map[string]ImageProcessingItem{},
 	}
 
 	logEvent("catalog", "catalog store initialized", map[string]any{
@@ -84,14 +88,76 @@ func (s *CatalogStore) buildStateLocked() CatalogState {
 		}
 	}
 
-	return CatalogState{
-		Catalogs:    catalogs,
-		Items:       items,
-		TempDir:     s.tempDir,
-		TotalFiles:  len(catalogs),
-		TotalItems:  len(items),
-		LastUpdated: lastUpdated,
+	processing := ImageProcessingState{Items: make(map[string]ImageProcessingItem, len(s.processingItems))}
+	for key, value := range s.processingItems {
+		processing.Items[key] = value
+		switch value.Status {
+		case "queued":
+			processing.Queued++
+		case "processing":
+			processing.Working++
+		case "done":
+			processing.Done++
+		case "error":
+			processing.Failed++
+		}
 	}
+	return CatalogState{
+		Catalogs:        catalogs,
+		Items:           items,
+		TempDir:         s.tempDir,
+		TotalFiles:      len(catalogs),
+		TotalItems:      len(items),
+		LastUpdated:     lastUpdated,
+		ImageProcessing: processing,
+	}
+}
+
+func (s *CatalogStore) SetImageProcessingStatus(itemID string, status ImageProcessingItem) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if strings.TrimSpace(itemID) == "" {
+		return
+	}
+	s.processingItems[itemID] = status
+	if status.Status != "done" {
+		delete(s.processedImages, itemID)
+	}
+}
+
+func (s *CatalogStore) ClearImageProcessingStatus(itemID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, generated := s.processedImages[itemID]; !generated {
+		delete(s.processingItems, itemID)
+	}
+}
+
+func (s *CatalogStore) SetProcessedImage(itemID, imagePath string) {
+	s.SetProcessedImageWithModel(itemID, imagePath, "")
+}
+
+func (s *CatalogStore) SetProcessedImageWithModel(itemID, imagePath, model string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.processedImages[itemID] = imagePath
+	s.processingItems[itemID] = ImageProcessingItem{Status: "done", Model: model}
+}
+
+func (s *CatalogStore) ProcessedImage(itemID string) (string, ImageProcessingItem) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.processedImages[itemID], s.processingItems[itemID]
+}
+
+func (s *CatalogStore) ResetProcessedImages() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, imagePath := range s.processedImages {
+		_ = os.Remove(imagePath)
+	}
+	s.processedImages = map[string]string{}
+	s.processingItems = map[string]ImageProcessingItem{}
 }
 
 func catalogItemSelectionKey(item CatalogItem) string {
@@ -251,11 +317,25 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 
 	catalogID := generateID()
 	items := make([]CatalogItem, 0, len(payload.Items))
+	restoredCovers := make(map[string]string)
 	for _, item := range payload.Items {
+		processedCover := strings.TrimSpace(item.ProcessedCover)
+		// The cover is only a ZIP-sidecar. Keep it out of the live catalog
+		// record; its runtime association is held separately just like a newly
+		// generated image.
+		item.ProcessedCover = ""
 		item.ItemID = generateID()
 		item.SourceCatalogID = catalogID
 		item.SourceFileName = header.Filename
 		items = append(items, item)
+		if processedCover == "" {
+			continue
+		}
+		if info, statErr := os.Stat(processedCover); statErr == nil && !info.IsDir() && info.Size() > 0 {
+			restoredCovers[item.ItemID] = processedCover
+		} else {
+			logEvent("image-processing", "saved ZIP cover unavailable", map[string]any{"tow_kod": item.TowKod, "path": processedCover})
+		}
 	}
 
 	catalog := UploadedCatalog{
@@ -271,6 +351,10 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 	}
 
 	s.catalogs = append(s.catalogs, catalog)
+	for itemID, coverPath := range restoredCovers {
+		s.processedImages[itemID] = coverPath
+		s.processingItems[itemID] = ImageProcessingItem{Status: "done"}
+	}
 	logEvent("file", "catalog file saved", map[string]any{
 		"catalog_id":  catalog.ID,
 		"item_count":  catalog.TotalItems,
@@ -380,6 +464,14 @@ func resolveCatalogImagePaths(payload *CatalogPayload, rootDir string) {
 	}
 
 	for itemIndex := range payload.Items {
+		if processedCover := strings.TrimSpace(payload.Items[itemIndex].ProcessedCover); processedCover != "" && !filepath.IsAbs(processedCover) {
+			absoluteCoverPath := filepath.Join(rootDir, filepath.FromSlash(processedCover))
+			if info, err := os.Stat(absoluteCoverPath); err == nil && !info.IsDir() && info.Size() > 0 {
+				payload.Items[itemIndex].ProcessedCover = absoluteCoverPath
+			} else {
+				payload.Items[itemIndex].ProcessedCover = ""
+			}
+		}
 		for imageIndex := range payload.Items[itemIndex].Images {
 			image := &payload.Items[itemIndex].Images[imageIndex]
 			trimmedPath := strings.TrimSpace(image.Path)
@@ -458,6 +550,21 @@ func (s *CatalogStore) WriteExportZIP(w io.Writer, itemKeys []string, towKods []
 		itemSlug := sanitizeExportName(firstNonEmpty(item.TowKod, item.Index, "artikal"))
 		if itemSlug == "" {
 			itemSlug = "artikal"
+		}
+
+		if generatedPath, progress := s.processedImages[item.ItemID], s.processingItems[item.ItemID]; progress.Status == "done" && strings.TrimSpace(generatedPath) != "" {
+			coverEntryName := uniqueZIPEntryName(
+				fmt.Sprintf("processed/%s/cover.png", itemSlug),
+				usedEntryNames,
+			)
+			if err := addFileToZIP(zipWriter, coverEntryName, generatedPath); err != nil {
+				logEvent("catalog", "processed export cover skipped", map[string]any{
+					"source_path": generatedPath,
+					"reason":      err.Error(),
+				})
+			} else {
+				exportItem.ProcessedCover = filepath.ToSlash(coverEntryName)
+			}
 		}
 
 		for imageIndex := range exportItem.Images {
@@ -621,6 +728,8 @@ func (s *CatalogStore) Clear() error {
 			s.catalogs = []UploadedCatalog{}
 			s.categorizations = map[string]ItemCategorySelection{}
 			s.pendingPublishes = map[string]CatalogItem{}
+			s.processedImages = map[string]string{}
+			s.processingItems = map[string]ImageProcessingItem{}
 			return nil
 		}
 		return fmt.Errorf("nije moguće pročitati temp folder: %w", err)
@@ -636,6 +745,8 @@ func (s *CatalogStore) Clear() error {
 	s.catalogs = []UploadedCatalog{}
 	s.categorizations = map[string]ItemCategorySelection{}
 	s.pendingPublishes = map[string]CatalogItem{}
+	s.processedImages = map[string]string{}
+	s.processingItems = map[string]ImageProcessingItem{}
 	logEvent("catalog", "catalog store cleared", map[string]any{
 		"temp_dir": s.tempDir,
 	})

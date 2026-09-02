@@ -318,6 +318,11 @@ func (s *CatalogStore) DeleteItemsBulk(itemKeys []string, towKods []string) erro
 				removedFromCatalog = true
 				delete(s.categorizations, item.ItemID)
 				delete(s.pendingPublishes, item.SelectionKey)
+				if processedPath := s.processedImages[item.ItemID]; processedPath != "" {
+					_ = os.Remove(processedPath)
+				}
+				delete(s.processedImages, item.ItemID)
+				delete(s.processingItems, item.ItemID)
 				continue
 			}
 

@@ -60,6 +60,12 @@ $backendExePath = Join-Path $backendDir "ASI.exe"
 $legacyBackendExePath = Join-Path $backendDir "backend.exe"
 $previousBackendExePath = Join-Path $backendDir "ICAI.exe"
 $iconPath = Join-Path $backendDir "icon.png"
+$aiAssetsDir = Join-Path $backendDir "assets\image-ai"
+$aiModelPath = Join-Path $aiAssetsDir "u2net.onnx"
+$detailedAIModelPath = Join-Path $aiAssetsDir "birefnet-general.onnx"
+$aiRuntimePath = Join-Path $aiAssetsDir "onnxruntime.dll"
+$detailedAIModelHash = "58F621F00F5D756097615970A88A791584600DCF7C45B18A0A6267535A1EBD3C"
+$appModelsDir = Join-Path $appDir "models"
 $goWinResPath = Join-Path $env:USERPROFILE "go\bin\go-winres.exe"
 $certPath = Join-Path $rootDir "certs\ICAIcert.pfx"
 $goBuildLdFlags = "-s -w"
@@ -82,6 +88,13 @@ try {
 
     if (!(Test-Path $iconPath)) {
         throw "Application icon not found: $iconPath"
+    }
+
+    if (!(Test-Path $aiModelPath) -or !(Test-Path $detailedAIModelPath) -or !(Test-Path $aiRuntimePath)) {
+        throw "Local AI assets are missing. Expected u2net.onnx, birefnet-general.onnx and onnxruntime.dll in backend/assets/image-ai"
+    }
+    if ((Get-FileHash $detailedAIModelPath -Algorithm SHA256).Hash -ne $detailedAIModelHash) {
+        throw "BiRefNet model integrity check failed; download the official model again"
     }
 
     if (!(Test-Path $certPath)) {
@@ -119,6 +132,15 @@ try {
         throw "app/dist does not exist after build"
     }
     Success "app/dist prepared"
+
+    Log "Copying local AI model and CPU runtime"
+    if (!(Test-Path $appModelsDir)) {
+        New-Item -ItemType Directory -Path $appModelsDir | Out-Null
+    }
+    Copy-Item -Force $aiModelPath (Join-Path $appModelsDir "u2net.onnx")
+    Copy-Item -Force $detailedAIModelPath (Join-Path $appModelsDir "birefnet-general.onnx")
+    Copy-Item -Force $aiRuntimePath (Join-Path $appModelsDir "onnxruntime.dll")
+    Success "Local AI assets prepared"
 
     Log "Removing old executables if they exist"
     if (Test-Path $appExePath) {

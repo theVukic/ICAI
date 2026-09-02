@@ -21,13 +21,16 @@ type CatalogPayload struct {
 type CatalogItem struct {
 	// ItemID is generated when a catalog is imported and is the application's
 	// stable identity for this row, independent of supplier fields.
-	ItemID               string                 `json:"itemId"`
-	SelectionKey         string                 `json:"selectionKey,omitempty"`
-	TowKod               string                 `json:"towKod"`
-	Index                string                 `json:"index"`
-	NameB2B              string                 `json:"nameB2B"`
-	BrandName            string                 `json:"brandName"`
-	Images               []CatalogImage         `json:"images"`
+	ItemID       string         `json:"itemId"`
+	SelectionKey string         `json:"selectionKey,omitempty"`
+	TowKod       string         `json:"towKod"`
+	Index        string         `json:"index"`
+	NameB2B      string         `json:"nameB2B"`
+	BrandName    string         `json:"brandName"`
+	Images       []CatalogImage `json:"images"`
+	// ProcessedCover is written only into an exported ASI ZIP. It points to
+	// the generated cover stored in that same ZIP, never to an app cache.
+	ProcessedCover       string                 `json:"processedCover,omitempty"`
 	TechnicalDescription string                 `json:"technicalDescription"`
 	Status               CatalogStatus          `json:"status"`
 	RetailPrice          float64                `json:"retailPrice"`
@@ -49,12 +52,36 @@ type CatalogStatus struct {
 }
 
 type CatalogState struct {
-	Catalogs    []UploadedCatalog `json:"catalogs"`
-	Items       []CatalogItem     `json:"items"`
-	TempDir     string            `json:"tempDir"`
-	TotalFiles  int               `json:"totalFiles"`
-	TotalItems  int               `json:"totalItems"`
-	LastUpdated *time.Time        `json:"lastUpdated"`
+	Catalogs        []UploadedCatalog    `json:"catalogs"`
+	Items           []CatalogItem        `json:"items"`
+	TempDir         string               `json:"tempDir"`
+	TotalFiles      int                  `json:"totalFiles"`
+	TotalItems      int                  `json:"totalItems"`
+	LastUpdated     *time.Time           `json:"lastUpdated"`
+	ImageProcessing ImageProcessingState `json:"imageProcessing"`
+}
+
+// ImageProcessingState is deliberately separate from CatalogItem. Generated
+// images are runtime-only assets and must never alter the imported catalog.
+type ImageProcessingState struct {
+	Enabled bool                           `json:"enabled"`
+	AIReady bool                           `json:"aiReady"`
+	AIError string                         `json:"aiError,omitempty"`
+	Items   map[string]ImageProcessingItem `json:"items"`
+	Queued  int                            `json:"queued"`
+	Working int                            `json:"working"`
+	Done    int                            `json:"done"`
+	Failed  int                            `json:"failed"`
+}
+
+type ImageProcessingItem struct {
+	Status string `json:"status"` // queued, processing, done, error
+	Error  string `json:"error,omitempty"`
+	Model  string `json:"model,omitempty"` // fast, detailed
+}
+
+type ImageProcessingSettingsRequest struct {
+	Enabled bool `json:"enabled"`
 }
 
 type ErrorResponse struct {
