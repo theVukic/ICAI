@@ -2,6 +2,8 @@ import { navigateWithFade } from "./transition";
 import { renderPublishSessionBadge } from "./publish-session";
 import { renderSessionBadge } from "./session";
 import { renderAppBrand } from "./branding";
+import Quill from "quill";
+import "quill/dist/quill.snow.css";
 
 const backIcon = `
   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -32,12 +34,15 @@ type CatalogStatus = {
 };
 
 type CatalogItem = {
+	itemId: string;
   towKod: string;
   index: string;
   nameB2B: string;
   brandName: string;
   images: CatalogImage[];
+	processedImageUrl?: string;
   technicalDescription: string;
+  technicalDescriptionFormat?: "plain" | "html";
   status: CatalogStatus;
   retailPrice: number;
   currencyCode: string;
@@ -58,6 +63,7 @@ const state: {
   activeImageIndex: number;
   sessionUsername: string;
   tokenConfigured: boolean;
+  quill: Quill | null;
 } = {
   item: null,
   isLoading: false,
@@ -68,6 +74,7 @@ const state: {
   activeImageIndex: 0,
   sessionUsername: "",
   tokenConfigured: false,
+  quill: null,
 };
 
 export function mountEditPage(root: HTMLDivElement, towKod: string): void {
@@ -75,9 +82,13 @@ export function mountEditPage(root: HTMLDivElement, towKod: string): void {
     state.sessionUsername = "";
   }
 
-  if (state.activeTowKod !== towKod || (!state.item && !state.isLoading)) {
-    state.activeTowKod = towKod;
-    state.activeImageIndex = 0;
+  if (!state.isLoading) {
+    if (state.activeTowKod !== towKod) {
+      state.activeTowKod = towKod;
+      state.activeImageIndex = 0;
+    }
+    // The AI can finish while the user is elsewhere in the app. Always reload
+    // on entering this page so the editor never keeps an old supplier version.
     void loadEditItem(root, towKod);
   }
 
@@ -92,6 +103,7 @@ export function setEditPageSession(sessionUsername: string, tokenConfigured: boo
 async function loadEditItem(root: HTMLDivElement, towKod: string): Promise<void> {
   state.isLoading = true;
   state.item = null;
+  state.quill = null;
   state.message = "";
   renderEditPage(root, towKod);
 
@@ -116,10 +128,13 @@ async function loadEditItem(root: HTMLDivElement, towKod: string): Promise<void>
 
 function renderEditPage(root: HTMLDivElement, towKod: string): void {
   const item = state.item;
-  const imageCount = item?.images?.length ?? 0;
+  const displayImages = item?.processedImageUrl
+    ? [{ position: -1, url: item.processedImageUrl }, ...item.images]
+    : item?.images ?? [];
+  const imageCount = displayImages.length;
   const safeImageIndex =
     imageCount > 0 ? Math.min(state.activeImageIndex, imageCount - 1) : 0;
-  const image = item?.images?.[safeImageIndex]?.url ?? "";
+  const image = displayImages[safeImageIndex]?.url ?? "";
   const priceValue =
     item && Number.isFinite(item.retailPrice) ? String(item.retailPrice) : "0";
 
@@ -211,7 +226,9 @@ function renderEditPage(root: HTMLDivElement, towKod: string): void {
 
                         <label class="edit-field edit-field-fill">
                           <span class="edit-label-tight">Deskripcija</span>
-                          <textarea id="editDescription" name="description" rows="10">${escapeHtml(item.technicalDescription || "")}</textarea>
+                          ${item.technicalDescriptionFormat === "html"
+                            ? `<div id="editDescriptionEditor" class="description-editor"></div>`
+                            : `<textarea id="editDescription" name="description" rows="10">${escapeHtml(item.technicalDescription || "")}</textarea>`}
                         </label>
 
                         <div class="edit-card-footer">
@@ -236,6 +253,7 @@ function renderEditPage(root: HTMLDivElement, towKod: string): void {
   `;
 
   bindEditEvents(root, towKod);
+  mountEditDescriptionEditor();
 }
 
 function bindEditEvents(root: HTMLDivElement, towKod: string): void {
@@ -250,15 +268,18 @@ function bindEditEvents(root: HTMLDivElement, towKod: string): void {
 
   for (const button of imageButtons) {
     button.addEventListener("click", () => {
-      if (!state.item || state.item.images.length < 2) {
+      const displayImages = state.item?.processedImageUrl
+        ? [{ position: -1, url: state.item.processedImageUrl }, ...state.item.images]
+        : state.item?.images ?? [];
+      if (!state.item || displayImages.length < 2) {
         return;
       }
 
       const direction = button.dataset.editImageNav;
       const delta = direction === "next" ? 1 : -1;
       state.activeImageIndex =
-        (state.activeImageIndex + delta + state.item.images.length) %
-        state.item.images.length;
+        (state.activeImageIndex + delta + displayImages.length) %
+        displayImages.length;
       updateEditImage();
     });
   }
@@ -271,9 +292,13 @@ function bindEditEvents(root: HTMLDivElement, towKod: string): void {
     const descriptionInput =
       document.querySelector<HTMLTextAreaElement>("#editDescription");
 
-    if (!nameInput || !priceInput || !descriptionInput) {
+    if (!nameInput || !priceInput || (!descriptionInput && !state.quill)) {
       return;
     }
+
+    const descriptionValue = state.quill
+      ? normalizeEditorHtml(state.quill.root.innerHTML)
+      : descriptionInput?.value || "";
 
     state.isSaving = true;
     renderEditPage(root, towKod);
@@ -287,7 +312,7 @@ function bindEditEvents(root: HTMLDivElement, towKod: string): void {
         body: JSON.stringify({
           name: nameInput.value,
           price: Number(priceInput.value),
-          description: descriptionInput.value,
+          description: descriptionValue,
         }),
       });
 
@@ -309,27 +334,58 @@ function bindEditEvents(root: HTMLDivElement, towKod: string): void {
   });
 }
 
-function updateEditImage(): void {
-  if (!state.item || state.item.images.length === 0) {
+function mountEditDescriptionEditor(): void {
+  const container = document.querySelector<HTMLDivElement>("#editDescriptionEditor");
+  if (!container || !state.item || state.item.technicalDescriptionFormat !== "html") {
+    state.quill = null;
     return;
   }
+  const quill = new Quill(container, {
+    theme: "snow",
+    modules: {
+      toolbar: [
+        [{ header: [2, 3, false] }],
+        ["bold", "italic"],
+        [{ list: "ordered" }, { list: "bullet" }],
+        ["clean"],
+      ],
+    },
+    placeholder: "Unesi deskripciju...",
+  });
+  quill.clipboard.dangerouslyPasteHTML(state.item.technicalDescription || "");
+  state.quill = quill;
+}
 
-  const currentImage = state.item.images[state.activeImageIndex];
+function normalizeEditorHtml(value: string): string {
+  const normalized = value.trim();
+  return normalized === "<p><br></p>" ? "" : normalized;
+}
+
+function updateEditImage(): void {
+	const displayImages = state.item?.processedImageUrl
+		? [{ position: -1, url: state.item.processedImageUrl }, ...state.item.images]
+		: state.item?.images ?? [];
+	if (!state.item || displayImages.length === 0) {
+		return;
+	}
+
+	const currentImage = displayImages[state.activeImageIndex];
   const imageElement = document.querySelector<HTMLImageElement>("#editImage");
   const countElement =
     document.querySelector<HTMLDivElement>("#editImageCount");
 
-  if (imageElement && currentImage) {
-    imageElement.classList.add("edit-image-fade");
-    imageElement.src = currentImage.url;
-    imageElement.alt = state.item.nameB2B || state.activeTowKod;
-    window.setTimeout(() => {
-      imageElement.classList.remove("edit-image-fade");
-    }, 140);
-  }
+	if (imageElement && currentImage) {
+		const nextImage = new Image();
+		nextImage.onload = () => {
+			if (state.activeImageIndex !== displayImages.indexOf(currentImage)) return;
+			imageElement.src = currentImage.url;
+			imageElement.alt = state.item?.nameB2B || state.activeTowKod;
+		};
+		nextImage.src = currentImage.url;
+	}
 
   if (countElement) {
-    countElement.textContent = `${state.activeImageIndex + 1}/${state.item.images.length}`;
+		countElement.textContent = `${state.activeImageIndex + 1}/${displayImages.length}`;
   }
 }
 

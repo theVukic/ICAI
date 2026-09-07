@@ -2,6 +2,8 @@ import { navigateWithFade } from "./transition";
 import { renderPublishSessionBadge } from "./publish-session";
 import { renderSessionBadge } from "./session";
 import { renderAppBrand } from "./branding";
+import Quill from "quill";
+import "quill/dist/quill.snow.css";
 
 const SELECTED_TOWKODS_STORAGE_KEY = "asiapp:selected-towkods";
 
@@ -81,6 +83,7 @@ const state: {
   tone: "muted" | "danger";
   sessionUsername: string;
   tokenConfigured: boolean;
+  quill: Quill | null;
 } = {
   items: [],
   isLoading: false,
@@ -89,6 +92,7 @@ const state: {
   tone: "muted",
   sessionUsername: "",
   tokenConfigured: false,
+  quill: null,
 };
 
 export function mountBulkEditPage(root: HTMLDivElement): void {
@@ -221,7 +225,7 @@ function renderBulkEditPage(root: HTMLDivElement): void {
 
                           <label class="edit-field edit-field-fill">
                             <span class="edit-label-tight">Deskripcija</span>
-                            <textarea id="bulkEditDescription" name="description" rows="10" placeholder="Ostavi prazno ako ne mijenjas"></textarea>
+                            <div id="bulkEditDescriptionEditor" class="description-editor"></div>
                           </label>
 
                           ${
@@ -263,6 +267,7 @@ function renderBulkEditPage(root: HTMLDivElement): void {
   `;
 
   bindBulkEditEvents(root);
+  mountBulkDescriptionEditor();
 }
 
 function bindBulkEditEvents(root: HTMLDivElement): void {
@@ -278,12 +283,12 @@ function bindBulkEditEvents(root: HTMLDivElement): void {
 
     const nameInput = document.querySelector<HTMLInputElement>("#bulkEditName");
     const priceInput = document.querySelector<HTMLInputElement>("#bulkEditPrice");
-    const descriptionInput =
-      document.querySelector<HTMLTextAreaElement>("#bulkEditDescription");
 
-    if (!nameInput || !priceInput || !descriptionInput) {
+    if (!nameInput || !priceInput || !state.quill) {
       return;
     }
+
+    const description = normalizeEditorHtml(state.quill.root.innerHTML);
 
     const payload: Record<string, unknown> = {
       itemKeys: state.items.map((item) => getItemSelectionKey(item)),
@@ -296,11 +301,11 @@ function bindBulkEditEvents(root: HTMLDivElement): void {
     if (priceInput.value.trim() !== "") {
       payload.price = Number(priceInput.value);
     }
-    if (descriptionInput.value.trim() !== "") {
-      payload.description = descriptionInput.value.trim();
+    if (description !== "") {
+      payload.description = description;
     }
 
-    if (Object.keys(payload).length === 1) {
+    if (Object.keys(payload).length === 2) {
       state.message = "Popuni barem jedno polje za izmjenu.";
       state.tone = "danger";
       renderBulkEditPage(root);
@@ -335,6 +340,31 @@ function bindBulkEditEvents(root: HTMLDivElement): void {
       renderBulkEditPage(root);
     }
   });
+}
+
+function mountBulkDescriptionEditor(): void {
+  const container = document.querySelector<HTMLDivElement>("#bulkEditDescriptionEditor");
+  if (!container) {
+    state.quill = null;
+    return;
+  }
+  state.quill = new Quill(container, {
+    theme: "snow",
+    modules: {
+      toolbar: [
+        [{ header: [2, 3, false] }],
+        ["bold", "italic"],
+        [{ list: "ordered" }, { list: "bullet" }],
+        ["clean"],
+      ],
+    },
+    placeholder: "Ostavi prazno ako ne mijenjaš",
+  });
+}
+
+function normalizeEditorHtml(value: string): string {
+  const normalized = value.trim();
+  return normalized === "<p><br></p>" ? "" : normalized;
 }
 
 function loadStoredSelectedTowKods(): string[] {

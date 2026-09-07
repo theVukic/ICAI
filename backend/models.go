@@ -30,14 +30,21 @@ type CatalogItem struct {
 	Images       []CatalogImage `json:"images"`
 	// ProcessedCover is written only into an exported ASI ZIP. It points to
 	// the generated cover stored in that same ZIP, never to an app cache.
-	ProcessedCover       string                 `json:"processedCover,omitempty"`
-	TechnicalDescription string                 `json:"technicalDescription"`
-	Status               CatalogStatus          `json:"status"`
-	RetailPrice          float64                `json:"retailPrice"`
-	CurrencyCode         string                 `json:"currencyCode"`
-	SourceCatalogID      string                 `json:"sourceCatalogId,omitempty"`
-	SourceFileName       string                 `json:"sourceFileName,omitempty"`
-	Categorization       *ItemCategorySelection `json:"categorization,omitempty"`
+	ProcessedCover string `json:"processedCover,omitempty"`
+	// ProcessedImageURL is a runtime-only authenticated URL for previewing the
+	// generated image in the UI. It is never an exported cover path.
+	ProcessedImageURL    string `json:"processedImageUrl,omitempty"`
+	TechnicalDescription string `json:"technicalDescription"`
+	// OriginalTechnicalDescription keeps the supplier text reversible when the
+	// local AI writes rich HTML into TechnicalDescription.
+	OriginalTechnicalDescription string                 `json:"originalTechnicalDescription,omitempty"`
+	TechnicalDescriptionFormat   string                 `json:"technicalDescriptionFormat,omitempty"`
+	Status                       CatalogStatus          `json:"status"`
+	RetailPrice                  float64                `json:"retailPrice"`
+	CurrencyCode                 string                 `json:"currencyCode"`
+	SourceCatalogID              string                 `json:"sourceCatalogId,omitempty"`
+	SourceFileName               string                 `json:"sourceFileName,omitempty"`
+	Categorization               *ItemCategorySelection `json:"categorization,omitempty"`
 }
 
 type CatalogImage struct {
@@ -59,6 +66,7 @@ type CatalogState struct {
 	TotalItems      int                  `json:"totalItems"`
 	LastUpdated     *time.Time           `json:"lastUpdated"`
 	ImageProcessing ImageProcessingState `json:"imageProcessing"`
+	AIProcessing    AIProcessingState    `json:"aiProcessing"`
 }
 
 // ImageProcessingState is deliberately separate from CatalogItem. Generated
@@ -80,8 +88,34 @@ type ImageProcessingItem struct {
 	Model  string `json:"model,omitempty"` // fast, detailed
 }
 
+type DescriptionProcessingItem struct {
+	Status string `json:"status"` // queued, processing, done, error
+	Error  string `json:"error,omitempty"`
+	Source string `json:"source,omitempty"` // web, catalog, cache
+	Model  string `json:"model,omitempty"`
+}
+
+type AIProcessingItem struct {
+	Image       ImageProcessingItem       `json:"image"`
+	Description DescriptionProcessingItem `json:"description"`
+}
+
+type AIProcessingState struct {
+	Enabled bool                        `json:"enabled"`
+	AIReady bool                        `json:"aiReady"`
+	AIError string                      `json:"aiError,omitempty"`
+	Items   map[string]AIProcessingItem `json:"items"`
+	Queued  int                         `json:"queued"`
+	Working int                         `json:"working"`
+	Done    int                         `json:"done"`
+	Failed  int                         `json:"failed"`
+}
+
 type ImageProcessingSettingsRequest struct {
 	Enabled bool `json:"enabled"`
+	// Retry explicitly restarts failed/pending work. A regular refresh sends the
+	// current value without this flag and must not interrupt active AI work.
+	Retry bool `json:"retry,omitempty"`
 }
 
 type ErrorResponse struct {

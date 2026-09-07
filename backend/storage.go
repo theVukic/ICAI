@@ -24,6 +24,8 @@ type CatalogStore struct {
 	pendingPublishes map[string]CatalogItem
 	processedImages  map[string]string
 	processingItems  map[string]ImageProcessingItem
+	descriptionItems map[string]DescriptionProcessingItem
+	aiEnabled        bool
 }
 
 var errCatalogAlreadyUploaded = errors.New("fajl je već dodat")
@@ -41,6 +43,7 @@ func NewCatalogStore() (*CatalogStore, error) {
 		pendingPublishes: map[string]CatalogItem{},
 		processedImages:  map[string]string{},
 		processingItems:  map[string]ImageProcessingItem{},
+		descriptionItems: map[string]DescriptionProcessingItem{},
 	}
 
 	logEvent("catalog", "catalog store initialized", map[string]any{
@@ -102,6 +105,22 @@ func (s *CatalogStore) buildStateLocked() CatalogState {
 			processing.Failed++
 		}
 	}
+	aiProcessing := AIProcessingState{Items: make(map[string]AIProcessingItem, len(items)), Enabled: s.aiEnabled}
+	for _, item := range items {
+		imageState := s.processingItems[item.ItemID]
+		descriptionState := s.descriptionItems[item.ItemID]
+		aiProcessing.Items[item.ItemID] = AIProcessingItem{Image: imageState, Description: descriptionState}
+		switch descriptionState.Status {
+		case "queued":
+			aiProcessing.Queued++
+		case "processing":
+			aiProcessing.Working++
+		case "done":
+			aiProcessing.Done++
+		case "error":
+			aiProcessing.Failed++
+		}
+	}
 	return CatalogState{
 		Catalogs:        catalogs,
 		Items:           items,
@@ -110,7 +129,14 @@ func (s *CatalogStore) buildStateLocked() CatalogState {
 		TotalItems:      len(items),
 		LastUpdated:     lastUpdated,
 		ImageProcessing: processing,
+		AIProcessing:    aiProcessing,
 	}
+}
+
+func (s *CatalogStore) SetAIEnabled(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.aiEnabled = enabled
 }
 
 func (s *CatalogStore) SetImageProcessingStatus(itemID string, status ImageProcessingItem) {
@@ -158,6 +184,102 @@ func (s *CatalogStore) ResetProcessedImages() {
 	}
 	s.processedImages = map[string]string{}
 	s.processingItems = map[string]ImageProcessingItem{}
+}
+
+func (s *CatalogStore) SetDescriptionProcessingStatus(itemID string, status DescriptionProcessingItem) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if strings.TrimSpace(itemID) != "" {
+		s.descriptionItems[itemID] = status
+	}
+}
+
+func (s *CatalogStore) DescriptionProcessing(itemID string) DescriptionProcessingItem {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.descriptionItems[itemID]
+}
+
+func (s *CatalogStore) ResetDescriptionProcessing() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.descriptionItems = map[string]DescriptionProcessingItem{}
+}
+
+func (s *CatalogStore) SetGeneratedDescription(itemID, description, source, model string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for catalogIndex := range s.catalogs {
+		catalog := &s.catalogs[catalogIndex]
+		for itemIndex := range catalog.Items {
+			item := &catalog.Items[itemIndex]
+			if item.ItemID != itemID {
+				continue
+			}
+			item.TechnicalDescription = strings.TrimSpace(description)
+			item.TechnicalDescriptionFormat = "html"
+			s.descriptionItems[itemID] = DescriptionProcessingItem{Status: "done", Source: source, Model: model}
+			return s.writeCatalogFile(*catalog)
+		}
+	}
+	return fmt.Errorf("%w: %s", errCatalogItemNotFound, itemID)
+}
+
+func (s *CatalogStore) RestoreOriginalDescriptions() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for catalogIndex := range s.catalogs {
+		catalog := &s.catalogs[catalogIndex]
+		changed := false
+		for itemIndex := range catalog.Items {
+			item := &catalog.Items[itemIndex]
+			if item.OriginalTechnicalDescription == "" {
+				continue
+			}
+			item.TechnicalDescription = item.OriginalTechnicalDescription
+			item.TechnicalDescriptionFormat = "plain"
+			changed = true
+		}
+		if changed {
+			if err := s.writeCatalogFile(*catalog); err != nil {
+				return err
+			}
+		}
+	}
+	s.descriptionItems = map[string]DescriptionProcessingItem{}
+	return nil
+}
+
+func (s *CatalogStore) AIWorkBlocking(itemKeys, towKods []string) (int, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.aiEnabled {
+		return 0, 0
+	}
+	targets := newCatalogSelectionTargets(itemKeys, towKods)
+	pending, failed := 0, 0
+	for _, catalog := range s.catalogs {
+		for _, item := range catalog.Items {
+			if !targets.Empty() && !targets.Match(item) {
+				continue
+			}
+			descriptionStatus := s.descriptionItems[item.ItemID].Status
+			switch descriptionStatus {
+			case "done":
+				// A completed local AI description is always sanitized HTML. Treat a
+				// supplier/plain description as unfinished even if an old in-memory
+				// status was lost or marked done too early.
+				if item.TechnicalDescriptionFormat != "html" {
+					pending++
+				}
+			case "error":
+				failed++
+			default:
+				pending++
+			}
+		}
+	}
+	return pending, failed
 }
 
 func catalogItemSelectionKey(item CatalogItem) string {
@@ -319,6 +441,14 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 	items := make([]CatalogItem, 0, len(payload.Items))
 	restoredCovers := make(map[string]string)
 	for _, item := range payload.Items {
+		if strings.TrimSpace(item.OriginalTechnicalDescription) == "" {
+			item.OriginalTechnicalDescription = item.TechnicalDescription
+		}
+		if item.TechnicalDescriptionFormat != "html" {
+			item.TechnicalDescriptionFormat = "plain"
+		} else {
+			item.TechnicalDescription = sanitizeDescriptionHTML(item.TechnicalDescription)
+		}
 		processedCover := strings.TrimSpace(item.ProcessedCover)
 		// The cover is only a ZIP-sidecar. Keep it out of the live catalog
 		// record; its runtime association is held separately just like a newly
@@ -351,6 +481,14 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 	}
 
 	s.catalogs = append(s.catalogs, catalog)
+	// An exported ASI ZIP carries the generated description in catalog.json.
+	// Restore its completed state before the upload handler queues AI work, so a
+	// saved catalog is displayed immediately instead of being generated again.
+	for _, item := range items {
+		if item.TechnicalDescriptionFormat == "html" && strings.TrimSpace(item.TechnicalDescription) != "" {
+			s.descriptionItems[item.ItemID] = DescriptionProcessingItem{Status: "done", Source: "saved"}
+		}
+	}
 	for itemID, coverPath := range restoredCovers {
 		s.processedImages[itemID] = coverPath
 		s.processingItems[itemID] = ImageProcessingItem{Status: "done"}
@@ -552,7 +690,7 @@ func (s *CatalogStore) WriteExportZIP(w io.Writer, itemKeys []string, towKods []
 			itemSlug = "artikal"
 		}
 
-		if generatedPath, progress := s.processedImages[item.ItemID], s.processingItems[item.ItemID]; progress.Status == "done" && strings.TrimSpace(generatedPath) != "" {
+		if generatedPath, progress := s.processedImages[item.ItemID], s.processingItems[item.ItemID]; s.aiEnabled && progress.Status == "done" && strings.TrimSpace(generatedPath) != "" {
 			coverEntryName := uniqueZIPEntryName(
 				fmt.Sprintf("processed/%s/cover.png", itemSlug),
 				usedEntryNames,
@@ -730,6 +868,7 @@ func (s *CatalogStore) Clear() error {
 			s.pendingPublishes = map[string]CatalogItem{}
 			s.processedImages = map[string]string{}
 			s.processingItems = map[string]ImageProcessingItem{}
+			s.descriptionItems = map[string]DescriptionProcessingItem{}
 			return nil
 		}
 		return fmt.Errorf("nije moguće pročitati temp folder: %w", err)
@@ -747,6 +886,7 @@ func (s *CatalogStore) Clear() error {
 	s.pendingPublishes = map[string]CatalogItem{}
 	s.processedImages = map[string]string{}
 	s.processingItems = map[string]ImageProcessingItem{}
+	s.descriptionItems = map[string]DescriptionProcessingItem{}
 	logEvent("catalog", "catalog store cleared", map[string]any{
 		"temp_dir": s.tempDir,
 	})

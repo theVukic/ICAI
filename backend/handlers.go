@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 )
@@ -20,8 +22,35 @@ func (a *App) handleCatalogState(w http.ResponseWriter, r *http.Request) {
 		"files": a.store.State().TotalFiles,
 	})
 	state := a.store.State()
-	a.decorateImageProcessingState(&state.ImageProcessing)
+	a.decorateAIProcessingState(&state)
 	writeJSON(w, http.StatusOK, state)
+}
+
+// handleProcessedCatalogImage serves only a generated image already associated
+// with a catalog item; a filesystem path is never accepted from the client.
+func (a *App) handleProcessedCatalogImage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	itemID := r.URL.Query().Get("itemId")
+	if itemID == "" {
+		writeError(w, http.StatusBadRequest, "nedostaje identifikator artikla")
+		return
+	}
+	if _, err := a.store.GetItemByID(itemID); err != nil {
+		writeError(w, http.StatusNotFound, "artikal nije pronađen")
+		return
+	}
+	imagePath, progress := a.store.ProcessedImage(itemID)
+	if progress.Status != "done" || imagePath == "" {
+		writeError(w, http.StatusNotFound, "obrađena slika nije dostupna")
+		return
+	}
+	// A generated image is immutable for the version in its URL. Keeping it in
+	// the private browser cache prevents a visible reload when using arrows.
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	http.ServeFile(w, r, imagePath)
 }
 
 func (a *App) handleCatalogUpload(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +112,7 @@ func (a *App) handleCatalogUpload(w http.ResponseWriter, r *http.Request) {
 		"skipped_duplicates": len(skippedDuplicates),
 	})
 	state = a.store.State()
-	a.decorateImageProcessingState(&state.ImageProcessing)
+	a.decorateAIProcessingState(&state)
 	writeJSON(w, http.StatusCreated, state)
 }
 
@@ -91,24 +120,32 @@ func (a *App) handleImageProcessingSettings(w http.ResponseWriter, r *http.Reque
 	switch r.Method {
 	case http.MethodGet:
 		state := a.store.State()
-		a.decorateImageProcessingState(&state.ImageProcessing)
-		writeJSON(w, http.StatusOK, state.ImageProcessing)
+		a.decorateAIProcessingState(&state)
+		writeJSON(w, http.StatusOK, state.AIProcessing)
 	case http.MethodPut:
 		var request ImageProcessingSettingsRequest
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&request); err != nil {
 			writeError(w, http.StatusBadRequest, "neispravna postavka obrade slika")
 			return
 		}
-		a.setImageProcessingEnabled(request.Enabled)
+		a.setImageProcessingEnabled(request.Enabled, request.Retry)
 		state := a.store.State()
-		a.decorateImageProcessingState(&state.ImageProcessing)
-		writeJSON(w, http.StatusOK, state.ImageProcessing)
+		a.decorateAIProcessingState(&state)
+		writeJSON(w, http.StatusOK, state.AIProcessing)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 func (a *App) handleCatalogClear(w http.ResponseWriter, r *http.Request) {
+	a.aiProcessingMu.Lock()
+	a.aiGeneration++
+	if a.aiCancel != nil {
+		a.aiCancel()
+	}
+	a.aiContext, a.aiCancel = context.WithCancel(context.Background())
+	a.aiProcessingMu.Unlock()
+	a.aiQueue.Clear()
 	if err := a.store.Clear(); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -129,6 +166,14 @@ func (a *App) handleCatalogExport(w http.ResponseWriter, r *http.Request) {
 	var req CatalogExportRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "neispravan export payload")
+		return
+	}
+	if pending, failed := a.store.AIWorkBlocking(req.ItemKeys, req.TowKods); pending > 0 || failed > 0 {
+		message := fmt.Sprintf("sačekajte da AI završi opise (%d preostalo)", pending)
+		if failed > 0 {
+			message = fmt.Sprintf("AI opis nije uspio za %d artikala; ponovite obradu ili isključite AI", failed)
+		}
+		writeError(w, http.StatusConflict, message)
 		return
 	}
 

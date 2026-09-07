@@ -118,6 +118,14 @@ func (a *App) handleCatalogPublish(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "neispravan JSON body")
 		return
 	}
+	if pending, failed := a.store.AIWorkBlocking(req.SelectedItemKeys, req.SelectedTowKods); pending > 0 || failed > 0 {
+		message := fmt.Sprintf("sačekajte da AI završi opise (%d preostalo)", pending)
+		if failed > 0 {
+			message = fmt.Sprintf("AI opis nije uspio za %d artikala; ponovite obradu ili isključite AI", failed)
+		}
+		writeError(w, http.StatusConflict, message)
+		return
+	}
 
 	log.Printf("[PUBLISH] request received selectedTowKods=%v", req.SelectedTowKods)
 
@@ -172,6 +180,25 @@ func (a *App) publishCatalogItems(ctx context.Context, items []CatalogItem) (Cat
 	if len(items) == 0 {
 		return CatalogPublishResponse{}, http.StatusBadRequest, fmt.Errorf("nema artikala za objavu")
 	}
+	// Items are reserved before they enter the single publish worker. Refresh
+	// them at execution time so a description that finished while the request
+	// was queued is the one sent to OLX, never the old supplier snapshot.
+	itemKeys := extractSelectionKeys(items)
+	if pending, failed := a.store.AIWorkBlocking(itemKeys, nil); pending > 0 || failed > 0 {
+		if failed > 0 {
+			return CatalogPublishResponse{}, http.StatusConflict, fmt.Errorf("AI opis nije uspio za %d artikala; ponovite obradu ili isključite AI", failed)
+		}
+		return CatalogPublishResponse{}, http.StatusConflict, fmt.Errorf("sačekajte da AI završi opise (%d preostalo)", pending)
+	}
+	for index, reservedItem := range items {
+		currentItem, err := a.store.GetItemByID(reservedItem.ItemID)
+		if err != nil {
+			return CatalogPublishResponse{}, http.StatusConflict, fmt.Errorf("artikal više nije dostupan za objavu: %w", err)
+		}
+		currentItem.SelectionKey = reservedItem.SelectionKey
+		currentItem.Categorization = reservedItem.Categorization
+		items[index] = currentItem
+	}
 	useSelection := true
 	log.Printf("[PUBLISH] processing queued batch size=%d", len(items))
 
@@ -221,17 +248,11 @@ func (a *App) publishCatalogItems(ctx context.Context, items []CatalogItem) (Cat
 		}
 		if a.imageProcessingIsEnabled() {
 			generatedPath, progress := a.store.ProcessedImage(item.ItemID)
-			if progress.Status != "done" || strings.TrimSpace(generatedPath) == "" {
-				reason := "obrada naslovne slike nije završena"
-				if progress.Status == "error" && strings.TrimSpace(progress.Error) != "" {
-					reason = "obrada naslovne slike nije uspjela: " + progress.Error
-				}
-				result.Failed = append(result.Failed, FailedListingResult{TowKod: item.TowKod, Title: item.NameB2B, Error: reason})
-				continue
+			if progress.Status == "done" && strings.TrimSpace(generatedPath) != "" {
+				// Position -1 guarantees the generated cover is uploaded first while
+				// retaining the imported first image as the second OLX image.
+				item.Images = append([]CatalogImage{{Position: -1, Path: generatedPath}}, item.Images...)
 			}
-			// Position -1 guarantees the generated cover is uploaded first while
-			// retaining the imported first image as the second OLX image.
-			item.Images = append([]CatalogImage{{Position: -1, Path: generatedPath}}, item.Images...)
 		}
 
 		publishableJobs = append(publishableJobs, publishJob{

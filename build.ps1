@@ -65,6 +65,11 @@ $aiModelPath = Join-Path $aiAssetsDir "u2net.onnx"
 $detailedAIModelPath = Join-Path $aiAssetsDir "birefnet-general.onnx"
 $aiRuntimePath = Join-Path $aiAssetsDir "onnxruntime.dll"
 $detailedAIModelHash = "58F621F00F5D756097615970A88A791584600DCF7C45B18A0A6267535A1EBD3C"
+$textAIAssetsDir = Join-Path $backendDir "assets\text-ai"
+$textAIModelPath = Join-Path $textAIAssetsDir "Qwen3-4B-Q4_K_M.gguf"
+$textAIServerPath = Join-Path $textAIAssetsDir "llama-server.exe"
+$textAIRuntimeManifest = Join-Path $textAIAssetsDir "runtime-sha256.txt"
+$textAIModelHash = "7485FE6F11AF29433BC51CAB58009521F205840F5B4AE3A32FA7F92E8534FDF5"
 $appModelsDir = Join-Path $appDir "models"
 $goWinResPath = Join-Path $env:USERPROFILE "go\bin\go-winres.exe"
 $certPath = Join-Path $rootDir "certs\ICAIcert.pfx"
@@ -95,6 +100,20 @@ try {
     }
     if ((Get-FileHash $detailedAIModelPath -Algorithm SHA256).Hash -ne $detailedAIModelHash) {
         throw "BiRefNet model integrity check failed; download the official model again"
+    }
+    if (!(Test-Path $textAIModelPath) -or !(Test-Path $textAIServerPath) -or !(Test-Path $textAIRuntimeManifest)) {
+        throw "Local description AI assets are missing. Expected Qwen3-4B-Q4_K_M.gguf and llama-server.exe in backend/assets/text-ai"
+    }
+    if ((Get-FileHash $textAIModelPath -Algorithm SHA256).Hash -ne $textAIModelHash) {
+        throw "Qwen3 description model integrity check failed"
+    }
+    foreach ($line in Get-Content $textAIRuntimeManifest) {
+        $parts = $line.Trim() -split '\s+', 2
+        if ($parts.Count -ne 2) { continue }
+        $runtimeFile = Join-Path $textAIAssetsDir $parts[0]
+        if (!(Test-Path $runtimeFile) -or (Get-FileHash $runtimeFile -Algorithm SHA256).Hash -ne $parts[1]) {
+            throw "llama.cpp runtime integrity check failed: $($parts[0])"
+        }
     }
 
     if (!(Test-Path $certPath)) {
@@ -140,6 +159,7 @@ try {
     Copy-Item -Force $aiModelPath (Join-Path $appModelsDir "u2net.onnx")
     Copy-Item -Force $detailedAIModelPath (Join-Path $appModelsDir "birefnet-general.onnx")
     Copy-Item -Force $aiRuntimePath (Join-Path $appModelsDir "onnxruntime.dll")
+    Copy-Item -Force (Join-Path $textAIAssetsDir "*") $appModelsDir
     Success "Local AI assets prepared"
 
     Log "Removing old executables if they exist"

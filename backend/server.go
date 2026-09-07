@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -27,21 +28,25 @@ const (
 var preferredPorts = []int{8080, 8081, 8082, 8083, 8084, 8090}
 
 type App struct {
-	store                  *CatalogStore
-	server                 *http.Server
-	listener               net.Listener
-	instanceLock           net.Listener
-	distDir                string
-	runtimeURLPath         string
-	baseURL                string
-	descriptionDir         string
-	olxCategories          *OLXCategoryService
-	auth                   *AuthManager
-	publishQueue           chan queuedPublishRequest
-	imageProcessor         *ImageProcessor
-	imageProcessingMu      sync.RWMutex
-	imageProcessingEnabled bool
-	imageProcessingQueue   chan CatalogItem
+	store                *CatalogStore
+	server               *http.Server
+	listener             net.Listener
+	instanceLock         net.Listener
+	distDir              string
+	runtimeURLPath       string
+	baseURL              string
+	descriptionDir       string
+	olxCategories        *OLXCategoryService
+	auth                 *AuthManager
+	publishQueue         chan queuedPublishRequest
+	imageProcessor       *ImageProcessor
+	descriptionProcessor *DescriptionProcessor
+	aiProcessingMu       sync.RWMutex
+	aiProcessingEnabled  bool
+	aiGeneration         uint64
+	aiContext            context.Context
+	aiCancel             context.CancelFunc
+	aiQueue              *aiJobQueue
 }
 
 type queuedPublishRequest struct {
@@ -118,7 +123,8 @@ func NewApp() (*App, error) {
 		}),
 		publishQueue:         make(chan queuedPublishRequest, 128),
 		imageProcessor:       NewImageProcessor(filepath.Join(exeDir, "background"), store.TempDir(), filepath.Join(exeDir, "models")),
-		imageProcessingQueue: make(chan CatalogItem, 256),
+		descriptionProcessor: NewDescriptionProcessor(filepath.Join(exeDir, "models"), filepath.Join(storagePaths.RootDir, "ai-description-cache")),
+		aiQueue:              newAIJobQueue(),
 	}
 
 	logEvent("startup", "application paths resolved", map[string]any{
@@ -147,68 +153,204 @@ func NewApp() (*App, error) {
 	}
 
 	go app.processPublishQueue()
-	go app.processImages()
+	go app.processAIQueue()
 
 	return app, nil
 }
 
 func (a *App) imageProcessingIsEnabled() bool {
-	a.imageProcessingMu.RLock()
-	defer a.imageProcessingMu.RUnlock()
-	return a.imageProcessingEnabled
+	a.aiProcessingMu.RLock()
+	defer a.aiProcessingMu.RUnlock()
+	return a.aiProcessingEnabled
 }
 
-func (a *App) setImageProcessingEnabled(enabled bool) {
-	a.imageProcessingMu.Lock()
-	a.imageProcessingEnabled = enabled
-	a.imageProcessingMu.Unlock()
+func (a *App) setImageProcessingEnabled(enabled bool, retry bool) {
+	a.aiProcessingMu.Lock()
+	// The browser synchronizes this setting after every page refresh. Keeping
+	// the running generation intact is essential: cancelling it here left cards
+	// stuck at "AI obrađuje" while their jobs had already been discarded.
+	if a.aiProcessingEnabled == enabled && !retry {
+		generation := a.aiGeneration
+		a.aiProcessingMu.Unlock()
+		// A page refresh used to cancel the active generation. Queue one harmless
+		// backup for any item still marked as running: the queue de-duplicates
+		// waiting items, and a job that has genuinely finished becomes a no-op.
+		// This lets an orphaned "obrađuje" status recover without interrupting a
+		// currently running image or description job.
+		if enabled {
+			a.resumeIncompleteAIWork(generation)
+		}
+		return
+	}
+	a.aiGeneration++
+	if a.aiCancel != nil {
+		a.aiCancel()
+	}
+	a.aiProcessingEnabled = enabled
+	generation := a.aiGeneration
+	aiContext, cancel := context.WithCancel(context.Background())
+	a.aiContext = aiContext
+	a.aiCancel = cancel
+	a.aiProcessingMu.Unlock()
+	a.store.SetAIEnabled(enabled)
+	a.aiQueue.Clear()
+
 	if enabled {
-		a.enqueueUnprocessedImages()
+		a.descriptionProcessor.ResetFailure()
+		a.enqueueUnprocessedAI(generation)
+		return
+	}
+	a.store.ResetProcessedImages()
+	if err := a.store.RestoreOriginalDescriptions(); err != nil {
+		logEvent("ai-processing", "failed to restore original descriptions", map[string]any{"error": err.Error()})
 	}
 }
 
-func (a *App) decorateImageProcessingState(state *ImageProcessingState) {
+func (a *App) decorateAIProcessingState(state *CatalogState) {
 	if state == nil {
 		return
 	}
-	state.Enabled = a.imageProcessingIsEnabled()
-	state.AIReady, state.AIError = a.imageProcessor.AIStatus()
-}
-
-func (a *App) enqueueUnprocessedImages() {
-	for _, item := range a.store.State().Items {
-		_, progress := a.store.ProcessedImage(item.ItemID)
-		if progress.Status == "queued" || progress.Status == "processing" || progress.Status == "done" {
-			continue
-		}
-		a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "queued"})
-		select {
-		case a.imageProcessingQueue <- item:
-		default:
-			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: "red za obradu slika je pun"})
-		}
+	imageReady, imageError := a.imageProcessor.AIStatus()
+	descriptionReady, descriptionError := a.descriptionProcessor.Status()
+	ready := imageReady && descriptionReady
+	reason := strings.TrimSpace(strings.Join([]string{imageError, descriptionError}, "; "))
+	state.ImageProcessing.Enabled = a.imageProcessingIsEnabled()
+	state.ImageProcessing.AIReady = imageReady
+	state.ImageProcessing.AIError = imageError
+	state.AIProcessing.Enabled = a.imageProcessingIsEnabled()
+	state.AIProcessing.AIReady = ready
+	state.AIProcessing.AIError = reason
+	for index := range state.Items {
+		a.decorateCatalogItem(&state.Items[index])
 	}
 }
 
-func (a *App) processImages() {
-	for item := range a.imageProcessingQueue {
-		if !a.imageProcessingIsEnabled() {
-			a.store.ClearImageProcessingStatus(item.ItemID)
+func (a *App) decorateCatalogItem(item *CatalogItem) {
+	if item == nil {
+		return
+	}
+	imagePath, progress := a.store.ProcessedImage(item.ItemID)
+	if progress.Status == "done" && strings.TrimSpace(imagePath) != "" {
+		version := "0"
+		if info, err := os.Stat(imagePath); err == nil {
+			version = strconv.FormatInt(info.ModTime().UnixNano(), 10)
+		}
+		item.ProcessedImageURL = "/api/catalog/processed-image?itemId=" + url.QueryEscape(item.ItemID) + "&v=" + version
+	}
+}
+
+func (a *App) currentAIGeneration() (uint64, bool, context.Context) {
+	a.aiProcessingMu.RLock()
+	defer a.aiProcessingMu.RUnlock()
+	ctx := a.aiContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.aiGeneration, a.aiProcessingEnabled, ctx
+}
+
+func (a *App) isCurrentAIJob(job aiCatalogJob) bool {
+	a.aiProcessingMu.RLock()
+	defer a.aiProcessingMu.RUnlock()
+	return a.aiProcessingEnabled && a.aiGeneration == job.Generation
+}
+
+func (a *App) enqueueUnprocessedImages() {
+	generation, enabled, _ := a.currentAIGeneration()
+	if enabled {
+		a.enqueueUnprocessedAI(generation)
+	}
+}
+
+func (a *App) enqueueUnprocessedAI(generation uint64) {
+	for _, item := range a.store.State().Items {
+		_, imageProgress := a.store.ProcessedImage(item.ItemID)
+		descriptionProgress := a.store.DescriptionProcessing(item.ItemID)
+		if imageProgress.Status == "done" && descriptionProgress.Status == "done" {
 			continue
 		}
-		a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "processing"})
-		if len(item.Images) == 0 {
-			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: "artikal nema sliku"})
+		if imageProgress.Status == "queued" || imageProgress.Status == "processing" || descriptionProgress.Status == "queued" || descriptionProgress.Status == "processing" {
 			continue
 		}
-		result, model, err := a.imageProcessor.Compose(item.ItemID, item.Images[0], func(selectedModel string) {
-			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "processing", Model: selectedModel})
-		})
+		if imageProgress.Status != "done" {
+			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "queued"})
+		}
+		if descriptionProgress.Status != "done" {
+			a.store.SetDescriptionProcessingStatus(item.ItemID, DescriptionProcessingItem{Status: "queued"})
+		}
+		a.aiQueue.Push(aiCatalogJob{ItemID: item.ItemID, Generation: generation})
+	}
+}
+
+func (a *App) resumeIncompleteAIWork(generation uint64) {
+	for _, item := range a.store.State().Items {
+		_, imageProgress := a.store.ProcessedImage(item.ItemID)
+		descriptionProgress := a.store.DescriptionProcessing(item.ItemID)
+		if imageProgress.Status == "done" && descriptionProgress.Status == "done" {
+			continue
+		}
+		if imageProgress.Status != "queued" && imageProgress.Status != "processing" &&
+			descriptionProgress.Status != "queued" && descriptionProgress.Status != "processing" {
+			continue
+		}
+		a.aiQueue.Push(aiCatalogJob{ItemID: item.ItemID, Generation: generation})
+	}
+}
+
+func (a *App) processAIQueue() {
+	for {
+		job, ok := a.aiQueue.Pop()
+		if !ok {
+			return
+		}
+		if !a.isCurrentAIJob(job) {
+			continue
+		}
+		item, err := a.store.GetItemByID(job.ItemID)
 		if err != nil {
-			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: err.Error()})
 			continue
 		}
-		a.store.SetProcessedImageWithModel(item.ItemID, result, model)
+		_, imageProgress := a.store.ProcessedImage(item.ItemID)
+		if imageProgress.Status != "done" {
+			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "processing"})
+			if len(item.Images) == 0 {
+				a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: "artikal nema sliku"})
+			} else {
+				result, model, imageErr := a.imageProcessor.Compose(item.ItemID, item.Images[0], func(selectedModel string) {
+					a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "processing", Model: selectedModel})
+				})
+				if !a.isCurrentAIJob(job) {
+					if result != "" {
+						_ = os.Remove(result)
+					}
+					continue
+				}
+				if imageErr != nil {
+					a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: imageErr.Error()})
+				} else {
+					a.store.SetProcessedImageWithModel(item.ItemID, result, model)
+				}
+			}
+		}
+
+		if !a.isCurrentAIJob(job) {
+			continue
+		}
+		if a.store.DescriptionProcessing(item.ItemID).Status != "done" {
+			a.store.SetDescriptionProcessingStatus(item.ItemID, DescriptionProcessingItem{Status: "processing", Model: descriptionModelName})
+			_, _, descriptionCtx := a.currentAIGeneration()
+			description, source, descriptionErr := a.descriptionProcessor.Generate(descriptionCtx, item)
+			if !a.isCurrentAIJob(job) {
+				continue
+			}
+			if descriptionErr != nil {
+				a.store.SetDescriptionProcessingStatus(item.ItemID, DescriptionProcessingItem{Status: "error", Error: descriptionErr.Error(), Model: descriptionModelName})
+				continue
+			}
+			if err := a.store.SetGeneratedDescription(item.ItemID, description, source, descriptionModelName); err != nil {
+				a.store.SetDescriptionProcessingStatus(item.ItemID, DescriptionProcessingItem{Status: "error", Error: err.Error(), Model: descriptionModelName})
+			}
+		}
 	}
 }
 
@@ -229,6 +371,8 @@ func (a *App) processPublishQueue() {
 
 func (a *App) Run() error {
 	defer func() {
+		a.aiQueue.Close()
+		a.descriptionProcessor.Stop()
 		if err := a.store.Cleanup(); err != nil {
 			log.Printf("cleanup temp foldera nije uspeo: %v", err)
 		}
@@ -313,7 +457,9 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 		}
 		a.handleCatalogUpload(w, r)
 	})
+	protectedAPI.HandleFunc("/api/catalog/processed-image", a.handleProcessedCatalogImage)
 	protectedAPI.HandleFunc("/api/image-processing/settings", a.handleImageProcessingSettings)
+	protectedAPI.HandleFunc("/api/ai-processing/settings", a.handleImageProcessingSettings)
 
 	protectedAPI.HandleFunc("/api/catalog/bulk-delete", a.handleCatalogBulkDelete)
 	protectedAPI.HandleFunc("/api/catalog/bulk-edit", a.handleCatalogBulkEdit)

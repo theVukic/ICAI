@@ -433,7 +433,8 @@ button {
 
 .notyf__dismiss {
     top: 10px;
-    left: 10px;
+    right: 10px;
+    left: auto;
     width: 28px;
     height: 28px;
     margin-right: 0;
@@ -1313,7 +1314,8 @@ button {
         border-color 220ms ease,
         background-color 220ms ease;
     will-change: transform;
-    height: 100%;
+    height: 620px;
+    align-self: stretch;
 }
 
 .product-card:not(.selection-enabled):hover {
@@ -1577,9 +1579,9 @@ button {
 .product-body {
     padding: 16px;
     display: grid;
-    grid-template-rows: auto auto minmax(110px, 1fr) auto;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     gap: 10px;
-    min-height: 260px;
+    min-height: 0;
 }
 
 .product-body h3 {
@@ -1596,6 +1598,46 @@ button {
     line-height: 1.5;
     overflow: auto;
     padding-right: 4px;
+}
+
+.product-description-preview {
+    min-height: 0;
+    max-height: 180px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-right: 4px;
+    color: var(--muted);
+    line-height: 1.5;
+    font-size: 0.9rem;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+}
+
+.product-card.list-mode .product-description-preview {
+    max-height: 112px;
+}
+
+.product-description-preview h3,
+.product-description-preview p,
+.product-description-preview ul,
+.product-description-preview ol {
+    margin: 0 0 8px;
+    padding-top: 0;
+    border: 0;
+}
+
+.product-description-preview h3 {
+    color: var(--text);
+    font-size: 0.96rem;
+}
+
+.product-description-preview ul,
+.product-description-preview ol {
+    padding-left: 20px;
+}
+
+.product-description-preview li + li {
+    margin-top: 4px;
 }
 
 .product-line {
@@ -1867,12 +1909,19 @@ button {
     overflow: hidden;
 }
 
-.image-processing-status {
+.ai-processing-statuses {
     position: absolute;
     left: 10px;
     bottom: 10px;
     z-index: 4;
+    display: grid;
+    gap: 5px;
     max-width: calc(100% - 20px);
+    pointer-events: none;
+}
+
+.image-processing-status {
+    max-width: 100%;
     padding: 5px 8px;
     border: 1px solid rgba(255,255,255,.18);
     border-radius: 999px;
@@ -1887,6 +1936,19 @@ button {
 .image-processing-status.processing { color: #7fbcff; }
 .image-processing-status.done { color: #6fe9b3; }
 .image-processing-status.error { color: #ff8d8d; }
+.image-processing-status.queued { color: #d6a62f; }
+
+.ai-retry-button {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid rgba(255, 141, 141, 0.35);
+    border-radius: 999px;
+    background: rgba(255, 141, 141, 0.1);
+    color: #ffb0b0;
+    font-size: 1rem;
+    line-height: 1;
+}
 
 .description-card-shell {
     width: min(1080px, 100%);
@@ -2366,14 +2428,6 @@ button {
     object-fit: cover;
     min-height: 100%;
     max-height: 100%;
-}
-
-.edit-hero-media img {
-    transition: opacity 140ms ease;
-}
-
-.edit-hero-media img.edit-image-fade {
-    opacity: 0.72;
 }
 
 .edit-hero-body {

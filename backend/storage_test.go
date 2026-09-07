@@ -47,7 +47,9 @@ func TestExportZIPKeepsProcessedCoverOnlyInsideZIP(t *testing.T) {
 	store := &CatalogStore{
 		catalogs: []UploadedCatalog{{Items: []CatalogItem{{
 			ItemID: "item-1", TowKod: "ABC-1", Images: []CatalogImage{{Path: original}},
+			TechnicalDescription: "<p>AI opis</p>", OriginalTechnicalDescription: "Početni opis", TechnicalDescriptionFormat: "html",
 		}}}},
+		aiEnabled:        true,
 		pendingPublishes: map[string]CatalogItem{},
 		categorizations:  map[string]ItemCategorySelection{},
 		processedImages:  map[string]string{"item-1": processed},
@@ -124,5 +126,104 @@ func TestExportZIPKeepsProcessedCoverOnlyInsideZIP(t *testing.T) {
 	coverPath, progress := restoredStore.ProcessedImage(catalog.Items[0].ItemID)
 	if progress.Status != "done" || coverPath == "" {
 		t.Fatalf("saved ZIP cover should be immediately reusable, got %q / %#v", coverPath, progress)
+	}
+	descriptionProgress := restoredStore.DescriptionProcessing(catalog.Items[0].ItemID)
+	if descriptionProgress.Status != "done" {
+		t.Fatalf("saved ZIP description should be immediately reusable, got %#v", descriptionProgress)
+	}
+}
+
+func TestRestoreOriginalDescriptionPersistsCatalog(t *testing.T) {
+	dir := t.TempDir()
+	catalogPath := filepath.Join(dir, "catalog.json")
+	payload := CatalogPayload{Items: []CatalogItem{{
+		ItemID: "item-1", TechnicalDescription: "<h3>AI opis</h3>",
+		OriginalTechnicalDescription: "Početni opis", TechnicalDescriptionFormat: "html",
+	}}}
+	encoded, err := json.Marshal(payload)
+	if err != nil || os.WriteFile(catalogPath, encoded, 0o644) != nil {
+		t.Fatal("failed to prepare catalog")
+	}
+	store := &CatalogStore{
+		catalogs:         []UploadedCatalog{{SavedPath: catalogPath, Items: payload.Items}},
+		descriptionItems: map[string]DescriptionProcessingItem{"item-1": {Status: "done"}},
+	}
+	if err := store.RestoreOriginalDescriptions(); err != nil {
+		t.Fatal(err)
+	}
+	item := store.catalogs[0].Items[0]
+	if item.TechnicalDescription != "Početni opis" || item.TechnicalDescriptionFormat != "plain" {
+		t.Fatalf("original description was not restored: %#v", item)
+	}
+	var saved CatalogPayload
+	input, _ := os.ReadFile(catalogPath)
+	if json.Unmarshal(input, &saved) != nil || saved.Items[0].TechnicalDescription != "Početni opis" {
+		t.Fatalf("restored description was not persisted: %s", input)
+	}
+}
+
+func TestAIWorkBlockingUsesOnlyRequestedItems(t *testing.T) {
+	store := &CatalogStore{
+		aiEnabled: true,
+		catalogs:  []UploadedCatalog{{Items: []CatalogItem{{ItemID: "ready", TechnicalDescriptionFormat: "html"}, {ItemID: "pending"}, {ItemID: "failed"}}}},
+		descriptionItems: map[string]DescriptionProcessingItem{
+			"ready": {Status: "done"}, "pending": {Status: "processing"}, "failed": {Status: "error"},
+		},
+	}
+	if pending, failed := store.AIWorkBlocking([]string{"ready"}, nil); pending != 0 || failed != 0 {
+		t.Fatalf("ready selection should not block, pending=%d failed=%d", pending, failed)
+	}
+	if pending, failed := store.AIWorkBlocking(nil, nil); pending != 1 || failed != 1 {
+		t.Fatalf("all items should report one pending and one failure, pending=%d failed=%d", pending, failed)
+	}
+}
+
+func TestAIWorkBlockingDoesNotTrustDoneStatusWithPlainDescription(t *testing.T) {
+	store := &CatalogStore{
+		aiEnabled:        true,
+		catalogs:         []UploadedCatalog{{Items: []CatalogItem{{ItemID: "item", TechnicalDescription: "Početni opis", TechnicalDescriptionFormat: "plain"}}}},
+		descriptionItems: map[string]DescriptionProcessingItem{"item": {Status: "done"}},
+	}
+	if pending, failed := store.AIWorkBlocking(nil, nil); pending != 1 || failed != 0 {
+		t.Fatalf("plain supplier description must remain blocked, pending=%d failed=%d", pending, failed)
+	}
+}
+
+func TestChangingNameOrPriceDoesNotCompleteAnUnchangedAIDescription(t *testing.T) {
+	dir := t.TempDir()
+	catalogPath := filepath.Join(dir, "catalog.json")
+	item := CatalogItem{ItemID: "item-1", NameB2B: "Stari naziv", RetailPrice: 10, TechnicalDescription: "Početni opis", TechnicalDescriptionFormat: "plain"}
+	payload, err := json.Marshal(CatalogPayload{Items: []CatalogItem{item}})
+	if err != nil || os.WriteFile(catalogPath, payload, 0o644) != nil {
+		t.Fatal("failed to prepare catalog")
+	}
+	store := &CatalogStore{
+		aiEnabled:        true,
+		catalogs:         []UploadedCatalog{{SavedPath: catalogPath, Items: []CatalogItem{item}}},
+		descriptionItems: map[string]DescriptionProcessingItem{"item-1": {Status: "processing"}},
+	}
+	updated, err := store.UpdateItemByID("item-1", CatalogItemEditRequest{Name: "Novi naziv", Price: 12, Description: "Početni opis"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.NameB2B != "Novi naziv" || updated.RetailPrice != 12 {
+		t.Fatalf("name and price were not updated: %#v", updated)
+	}
+	if updated.TechnicalDescription != "Početni opis" || updated.TechnicalDescriptionFormat != "plain" {
+		t.Fatalf("unchanged description was altered: %#v", updated)
+	}
+	if status := store.DescriptionProcessing("item-1"); status.Status != "processing" {
+		t.Fatalf("AI work must continue after name/price edit, got %#v", status)
+	}
+}
+
+func TestTemplateKeepsIndexOutsideAIHTML(t *testing.T) {
+	item := CatalogItem{Index: "0949", TechnicalDescription: "<p>AI opis</p>", TechnicalDescriptionFormat: "html"}
+	if got := renderDescriptionTemplate("${technicalDescription} ${index}", item); got != "<p>AI opis</p> 0949" {
+		t.Fatalf("template must keep index outside AI description, got %q", got)
+	}
+	item.TechnicalDescriptionFormat = "plain"
+	if got := renderDescriptionTemplate("${index}", item); got != "0949" {
+		t.Fatalf("standard template must preserve index, got %q", got)
 	}
 }

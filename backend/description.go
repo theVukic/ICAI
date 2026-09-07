@@ -219,13 +219,20 @@ func templateValuesForItem(item CatalogItem) map[string]string {
 		"index":                escapeTemplateHTML(item.Index),
 		"nameB2B":              escapeTemplateHTML(item.NameB2B),
 		"brandName":            escapeTemplateHTML(item.BrandName),
-		"technicalDescription": plainTextToHTML(item.TechnicalDescription),
+		"technicalDescription": descriptionToHTML(item),
 		"retailPrice":          priceText,
 		"currencyCode":         escapeTemplateHTML(formatTemplateCurrency(item.CurrencyCode)),
 		"sourceFileName":       escapeTemplateHTML(item.SourceFileName),
 		"statusCode":           escapeTemplateHTML(item.Status.Code),
 		"statusName":           escapeTemplateHTML(item.Status.Name),
 	}
+}
+
+func descriptionToHTML(item CatalogItem) string {
+	if item.TechnicalDescriptionFormat == "html" {
+		return sanitizeDescriptionHTML(item.TechnicalDescription)
+	}
+	return plainTextToHTML(item.TechnicalDescription)
 }
 
 func plainTextToHTML(value string) string {

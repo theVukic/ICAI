@@ -228,7 +228,8 @@ func ensureTargetRepoReady() (string, error) {
 		clearScreen()
 		printHeader("Git login / clone")
 		fmt.Printf("Repo %s nije pronadjen u Documents folderu.\n", targetRepoName)
-		fmt.Println("Pokrecem git clone. Ako Git trazi prijavu, samo se uloguj u terminalu koji se otvori ovdje.\n")
+		fmt.Println("Pokrecem git clone. Ako Git trazi prijavu, samo se uloguj u terminalu koji se otvori ovdje.")
+		fmt.Println()
 		if err := runGitCommand("", "clone", targetRepoURL, repoPath); err != nil {
 			return "", fmt.Errorf("git clone nije uspio: %w", err)
 		}
@@ -242,7 +243,8 @@ func ensureTargetRepoReady() (string, error) {
 
 	clearScreen()
 	printHeader("Git pull")
-	fmt.Println("Povlacim zadnje promjene iz ICAIL repo-a.\n")
+	fmt.Println("Povlacim zadnje promjene iz ICAIL repo-a.")
+	fmt.Println()
 	if err := runGitCommand(repoPath, "pull"); err != nil {
 		return "", fmt.Errorf("git pull nije uspio: %w", err)
 	}
@@ -262,7 +264,8 @@ func addUserFlow(scanner *bufio.Scanner, usersFile, pepperFile, repoPath string)
 	clearScreen()
 	printHeader("Dodavanje korisnika")
 	fmt.Println("Unesi podatke za novog korisnika.")
-	fmt.Println("Unesi 0 na bilo kom polju za izlaz.\n")
+	fmt.Println("Unesi 0 na bilo kom polju za izlaz.")
+	fmt.Println()
 
 	pepper, err := promptPepperForUser(scanner, pepperFile)
 	if err != nil {
@@ -328,7 +331,8 @@ func addUserFlow(scanner *bufio.Scanner, usersFile, pepperFile, repoPath string)
 func editUserFlow(scanner *bufio.Scanner, usersFile, repoPath, pepperFile string) error {
 	clearScreen()
 	printHeader("Edit user")
-	fmt.Println("Unesi 0 za izlaz iz ovog ekrana.\n")
+	fmt.Println("Unesi 0 za izlaz iz ovog ekrana.")
+	fmt.Println()
 
 	config, err := loadConfig(usersFile)
 	if err != nil {
@@ -419,7 +423,8 @@ func editUserFlow(scanner *bufio.Scanner, usersFile, repoPath, pepperFile string
 func verifyLoginFlow(scanner *bufio.Scanner, usersFile, pepperFile string) error {
 	clearScreen()
 	printHeader("Verify login")
-	fmt.Println("Unesi 0 za izlaz iz ovog ekrana.\n")
+	fmt.Println("Unesi 0 za izlaz iz ovog ekrana.")
+	fmt.Println()
 
 	username, err := promptRequiredAllowZero(scanner, "Username")
 	if err != nil {
@@ -449,7 +454,8 @@ func verifyLoginFlow(scanner *bufio.Scanner, usersFile, pepperFile string) error
 func deleteUserFlow(scanner *bufio.Scanner, usersFile, repoPath, pepperFile string) error {
 	clearScreen()
 	printHeader("Brisanje korisnika")
-	fmt.Println("Unesi 0 za izlaz iz ovog ekrana.\n")
+	fmt.Println("Unesi 0 za izlaz iz ovog ekrana.")
+	fmt.Println()
 
 	config, err := loadConfig(usersFile)
 	if err != nil {
@@ -1195,7 +1201,8 @@ func changePepperFlow(scanner *bufio.Scanner, pepperFile string) (string, bool, 
 	printHeader("Change pepper")
 	fmt.Println("Ovo mijenja aktivni pepper za nove korisnike.")
 	fmt.Println("Stari pepper ce ostati u legacy listi da mozes raditi sa starim korisnicima.")
-	fmt.Println("Unesi 0 na bilo kom polju za izlaz.\n")
+	fmt.Println("Unesi 0 na bilo kom polju za izlaz.")
+	fmt.Println()
 
 	currentPepper, err := promptCurrentPepper(scanner, pepperFile)
 	if err != nil {
@@ -1281,12 +1288,14 @@ func makePepperFlow(scanner *bufio.Scanner, pepperFile string) (string, bool, er
 	printHeader("Make pepper")
 	fmt.Println("Ovo pravi novi pepper.json.")
 	fmt.Println("Ako pepper.json vec postoji, mozes ga overwrite-ati.")
-	fmt.Println("Unesi 0 na bilo kom polju za izlaz.\n")
+	fmt.Println("Unesi 0 na bilo kom polju za izlaz.")
+	fmt.Println()
 	fmt.Println("Sta mozes upisati za putanju:")
 	fmt.Printf("- Enter = koristi default: %s\n", pepperFile)
 	fmt.Println("- Folder putanju, npr: C:\\Users\\Vukic\\Desktop\\MyPepperFolder")
 	fmt.Println("- Pun .json fajl, npr: C:\\Users\\Vukic\\Desktop\\pepper.json")
-	fmt.Println("Ako uneses samo folder, program ce u njemu napraviti pepper.json.\n")
+	fmt.Println("Ako uneses samo folder, program ce u njemu napraviti pepper.json.")
+	fmt.Println()
 
 	targetPath, err := promptStringAllowZero(scanner, fmt.Sprintf("Putanja za pepper.json [%s]", pepperFile))
 	if err != nil {
@@ -1402,7 +1411,8 @@ func loadOrSetupPepper(scanner *bufio.Scanner, pepperFile string) (string, error
 		clearScreen()
 		printHeader("Prvo podesavanje pepper-a")
 		fmt.Println("Program nije pronasao pepper.json.")
-		fmt.Println("Unesi novi pepper. Zapamti ga, jer se original ne cuva i trebace ti pri svakom narednom pokretanju.\n")
+		fmt.Println("Unesi novi pepper. Zapamti ga, jer se original ne cuva i trebace ti pri svakom narednom pokretanju.")
+		fmt.Println()
 
 		pepper, err := promptRequired(scanner, "Novi pepper")
 		if err != nil {
@@ -1438,7 +1448,8 @@ func loadOrSetupPepper(scanner *bufio.Scanner, pepperFile string) (string, error
 
 	clearScreen()
 	printHeader("Unos pepper-a")
-	fmt.Println("Unesi pepper za rad sa postojecim users podacima.\n")
+	fmt.Println("Unesi pepper za rad sa postojecim users podacima.")
+	fmt.Println()
 
 	pepper, err := promptRequired(scanner, "Pepper")
 	if err != nil {
