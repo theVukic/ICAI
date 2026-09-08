@@ -185,6 +185,52 @@ button {
     filter: drop-shadow(0 0 6px rgba(101, 243, 174, 0.9)) drop-shadow(0 0 18px rgba(55, 219, 134, 0.7));
 }
 
+.update-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(5, 10, 18, 0.72);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+.update-dialog {
+    width: min(100%, 490px);
+    padding: 34px;
+    border: 1px solid rgba(80, 162, 255, 0.5);
+    border-radius: 22px;
+    background: linear-gradient(145deg, #1b2736, #111820);
+    box-shadow: 0 28px 80px rgba(0, 0, 0, 0.5), 0 0 48px rgba(50, 145, 255, 0.16);
+    animation: update-dialog-in 220ms ease-out;
+}
+
+.update-dialog-icon {
+    display: grid;
+    width: 42px;
+    height: 42px;
+    place-items: center;
+    margin-bottom: 18px;
+    border-radius: 13px;
+    background: linear-gradient(135deg, var(--blue), var(--blue-strong));
+    color: #fff;
+    font-size: 26px;
+    font-weight: 800;
+}
+
+.update-dialog-eyebrow { color: #7fbcff; font-size: 11px; font-weight: 800; letter-spacing: .14em; }
+.update-dialog h1 { margin: 8px 0 12px; font-size: 25px; }
+.update-dialog p { margin: 0; color: #c1ccd9; line-height: 1.55; }
+.update-dialog-notes { max-height: 108px; overflow: auto; margin-top: 17px; padding: 12px; border-radius: 10px; background: rgba(255,255,255,.045); color: #9eabba; font-size: 13px; white-space: pre-wrap; }
+.update-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 28px; }
+.update-dialog-actions button { min-width: 110px; padding: 11px 15px; border-radius: 10px; font-weight: 700; }
+.update-decline { color: #d5deea; background: rgba(255,255,255,.08); }
+.update-accept { color: #fff; background: linear-gradient(135deg, var(--blue), var(--blue-strong)); box-shadow: 0 9px 22px rgba(25, 118, 243, .28); }
+.update-dialog-actions button:disabled { cursor: wait; opacity: .65; transform: none; }
+@keyframes update-dialog-in { from { opacity: 0; transform: translateY(12px) scale(.98); } to { opacity: 1; transform: none; } }
+
 .footer-image-processing-control {
     display: inline-flex;
     align-items: center;

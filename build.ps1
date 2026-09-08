@@ -1,3 +1,9 @@
+param(
+    [string]$Version = "0.0.0-dev",
+    [string]$UpdateManifestURL = "",
+    [switch]$SkipSign
+)
+
 $ErrorActionPreference = "Stop"
 
 function Log($msg) {
@@ -73,10 +79,14 @@ $textAIModelHash = "7485FE6F11AF29433BC51CAB58009521F205840F5B4AE3A32FA7F92E8534
 $appModelsDir = Join-Path $appDir "models"
 $goWinResPath = Join-Path $env:USERPROFILE "go\bin\go-winres.exe"
 $certPath = Join-Path $rootDir "certs\ICAIcert.pfx"
-$goBuildLdFlags = "-s -w"
+$goBuildLdFlags = "-s -w -H windowsgui -X main.AppVersion=$Version -X main.UpdateManifestURL=$UpdateManifestURL"
 $goBuildArgs = @("build", "-trimpath", "-buildvcs=false", "-ldflags=$goBuildLdFlags", "-o", $appExePath)
+$updaterExePath = Join-Path $appDir "ASI-Updater.exe"
+$updaterBuildArgs = @("build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -H windowsgui", "-o", $updaterExePath, ".\cmd\asi-updater")
 
-$certPassword = "snayrexkrmak2002"
+# Never put certificate passwords in source control. Set ASI_CERT_PASSWORD in
+# the environment before a signed release build.
+$certPassword = $env:ASI_CERT_PASSWORD
 
 $signtool = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe"
 
@@ -116,12 +126,10 @@ try {
         }
     }
 
-    if (!(Test-Path $certPath)) {
-        throw "Certificate not found: $certPath"
-    }
-
-    if (!(Test-Path $signtool)) {
-        throw "signtool.exe not found: $signtool"
+    if (!$SkipSign) {
+        if (!(Test-Path $certPath)) { throw "Certificate not found: $certPath" }
+        if ([string]::IsNullOrWhiteSpace($certPassword)) { throw "ASI_CERT_PASSWORD environment variable is required for signing" }
+        if (!(Test-Path $signtool)) { throw "signtool.exe not found: $signtool" }
     }
 
     if (!(Test-Path $goWinResPath)) {
@@ -202,10 +210,21 @@ try {
     Pop-Location
     Success "Executable built: $appExePath"
 
-    Log "Signing ASI.exe"
-    Sign-AppExecutable $appExePath
+    Log "Building ASI-Updater.exe"
+    Push-Location $backendDir
+    & go @updaterBuildArgs
+    if ($LASTEXITCODE -ne 0) { throw "Updater build failed" }
+    Pop-Location
+    Success "Updater built: $updaterExePath"
 
-    Success "Executable signed successfully"
+    if (!$SkipSign) {
+        Log "Signing ASI.exe"
+        Sign-AppExecutable $appExePath
+        Sign-AppExecutable $updaterExePath
+        Success "Executables signed successfully"
+    } else {
+        Log "Skipping code signing"
+    }
     Success "Build process finished successfully"
     Log "Final output folder: $appDir"
 }

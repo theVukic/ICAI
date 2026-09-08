@@ -107,6 +107,16 @@ type ErrorResponse = {
   error: string;
 };
 
+type UpdateStatus = {
+  checked: boolean;
+  available: boolean;
+  updated?: boolean;
+  version?: string;
+  notes?: string;
+  error?: string;
+  nonce: string;
+};
+
 type CatalogResponse = CatalogState | ErrorResponse;
 
 type PublishResponse = {
@@ -169,6 +179,7 @@ mountPageTransition(root);
 let authPollTimer: number | null = null;
 let loadStateInFlight: Promise<void> | null = null;
 const descriptionPreviewScrollPositions = new Map<string, number>();
+let updatePromptShown = false;
 
 const notyf = new Notyf({
   duration: 0,
@@ -2677,7 +2688,105 @@ window.setInterval(() => {
   }
 }, 1500);
 
+async function initializeUpdatePrompt(): Promise<void> {
+  // The backend checks once per ASI process. Polling here only waits for that
+  // startup check to finish; it never schedules another update request.
+  for (let attempt = 0; attempt < 20 && !updatePromptShown; attempt += 1) {
+    try {
+      const response = await fetch("/api/update/status", { cache: "no-store" });
+      if (response.ok) {
+        const status = (await response.json()) as UpdateStatus;
+        if (status.checked) {
+          if (status.updated && status.version) {
+            showUpdateComplete(status);
+          }
+          if (status.available && status.version && status.nonce) {
+            showUpdatePrompt(status);
+          }
+          return;
+        }
+      }
+    } catch {
+      // Offline update checks must never block ASI startup.
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+  }
+}
+
+function showUpdateComplete(status: UpdateStatus): void {
+  const overlay = document.createElement("div");
+  overlay.className = "update-overlay";
+  overlay.innerHTML = `
+    <section class="update-dialog update-dialog-complete" role="dialog" aria-modal="true" aria-labelledby="updateCompleteTitle">
+      <div class="update-dialog-icon" aria-hidden="true">✓</div>
+      <span class="update-dialog-eyebrow">AŽURIRANJE ZAVRŠENO</span>
+      <h1 id="updateCompleteTitle">ASI je ažuriran</h1>
+      <p>Uspješno je instalirana verzija <strong>v${escapeHtml(status.version || "")}</strong>.</p>
+      ${status.notes ? `<div class="update-dialog-notes">${escapeHtml(status.notes)}</div>` : ""}
+      <div class="update-dialog-actions"><button type="button" class="update-accept">U redu</button></div>
+    </section>
+  `;
+  document.body.appendChild(overlay);
+  const button = overlay.querySelector<HTMLButtonElement>("button");
+  button?.focus();
+  button?.addEventListener("click", () => overlay.remove());
+}
+
+function showUpdatePrompt(status: UpdateStatus): void {
+  if (updatePromptShown) {
+    return;
+  }
+  updatePromptShown = true;
+  const overlay = document.createElement("div");
+  overlay.className = "update-overlay";
+  overlay.innerHTML = `
+    <section class="update-dialog" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+      <div class="update-dialog-icon" aria-hidden="true">↑</div>
+      <span class="update-dialog-eyebrow">NOVA VERZIJA</span>
+      <h1 id="updateTitle">Dostupno je ažuriranje</h1>
+      <p>Nova verzija ASI <strong>v${escapeHtml(status.version || "")}</strong> je dostupna. Da li želite ažurirati aplikaciju?</p>
+      ${status.notes ? `<div class="update-dialog-notes">${escapeHtml(status.notes)}</div>` : ""}
+      <div class="update-dialog-actions">
+        <button type="button" class="update-decline">Ne</button>
+        <button type="button" class="update-accept">Da, ažuriraj</button>
+      </div>
+    </section>
+  `;
+  document.body.appendChild(overlay);
+
+  const decline = overlay.querySelector<HTMLButtonElement>(".update-decline");
+  const accept = overlay.querySelector<HTMLButtonElement>(".update-accept");
+  decline?.focus();
+  decline?.addEventListener("click", async () => {
+    await fetch("/api/update/decline", {
+      method: "POST",
+      headers: { "X-ASI-Update-Nonce": status.nonce },
+    }).catch(() => undefined);
+    overlay.remove();
+  });
+  accept?.addEventListener("click", async () => {
+    if (!accept || !decline) return;
+    accept.disabled = true;
+    decline.disabled = true;
+    accept.textContent = "Pokrećem updater...";
+    try {
+      const response = await fetch("/api/update/accept", {
+        method: "POST",
+        headers: { "X-ASI-Update-Nonce": status.nonce },
+      });
+      if (!response.ok) throw new Error("Updater nije pokrenut.");
+      overlay.querySelector("p")!.textContent = "ASI se zatvara i ažuriranje počinje u zasebnom prozoru.";
+    } catch (error) {
+      accept.disabled = false;
+      decline.disabled = false;
+      accept.textContent = "Da, ažuriraj";
+      notyf.error(error instanceof Error ? error.message : "Updater nije pokrenut.");
+    }
+  });
+}
+
 void (async () => {
+  void initializeUpdatePrompt();
   await refreshAuthentication(true);
   await startApplication();
 })();

@@ -47,6 +47,9 @@ type App struct {
 	aiContext            context.Context
 	aiCancel             context.CancelFunc
 	aiQueue              *aiJobQueue
+	shutdownOnce         sync.Once
+	desktop              desktopWindow
+	update               *updateManager
 }
 
 type queuedPublishRequest struct {
@@ -126,6 +129,8 @@ func NewApp() (*App, error) {
 		descriptionProcessor: NewDescriptionProcessor(filepath.Join(exeDir, "models"), filepath.Join(storagePaths.RootDir, "ai-description-cache")),
 		aiQueue:              newAIJobQueue(),
 	}
+	app.update = newUpdateManager(app)
+	app.desktop = newDesktopWindow()
 
 	logEvent("startup", "application paths resolved", map[string]any{
 		"app_data_root":   storagePaths.RootDir,
@@ -383,9 +388,7 @@ func (a *App) Run() error {
 		logEvent("startup", "single instance already running", map[string]any{
 			"existing_url": existingURL,
 		})
-		if existingURL != "" {
-			openBrowser(existingURL)
-		}
+		focusExistingASIWindow(existingURL)
 		return nil
 	}
 	defer a.releaseSingleInstanceLock()
@@ -399,11 +402,12 @@ func (a *App) Run() error {
 	a.persistRuntimeURL(a.baseURL)
 	defer a.clearRuntimeURL()
 
-	go a.waitForShutdown()
+	serverDone := make(chan error, 1)
 	go func() {
-		time.Sleep(700 * time.Millisecond)
-		openBrowser(a.baseURL)
+		serverDone <- a.server.Serve(a.listener)
 	}()
+	go a.waitForShutdown()
+	go a.update.checkOnce(context.Background())
 
 	if a.olxCategories != nil && a.olxCategories.HasToken() {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -425,17 +429,25 @@ func (a *App) Run() error {
 	log.Printf("App running on %s", a.baseURL)
 	log.Printf("Temp folder: %s", a.store.TempDir())
 
-	err = a.server.Serve(a.listener)
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := a.desktop.Run(a.baseURL); err != nil {
+		a.requestShutdown()
 		return err
 	}
 
+	a.requestShutdown()
+	err = <-serverDone
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
 	return nil
 }
 
 func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/test", a.handleHealth)
 	mux.HandleFunc("/api/logs/event", a.handleClientLogEvent)
+	mux.HandleFunc("/api/update/status", a.handleUpdateStatus)
+	mux.HandleFunc("/api/update/accept", a.handleUpdateAccept)
+	mux.HandleFunc("/api/update/decline", a.handleUpdateDecline)
 
 	protectedAPI := http.NewServeMux()
 
@@ -570,12 +582,30 @@ func (a *App) waitForShutdown() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	a.requestShutdown()
+}
 
-	if err := a.server.Shutdown(ctx); err != nil {
-		log.Printf("gašenje servera nije uspelo: %v", err)
-	}
+func (a *App) requestShutdown() {
+	a.shutdownOnce.Do(func() {
+		if a.desktop != nil {
+			a.desktop.Close()
+		}
+		if a.aiCancel != nil {
+			a.aiCancel()
+		}
+		// llama-server.exe is a hidden child process. Stop it before the HTTP
+		// server is torn down so closing ASI never leaves AI running.
+		if a.descriptionProcessor != nil {
+			a.descriptionProcessor.Stop()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if a.server != nil {
+			if err := a.server.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("gašenje servera nije uspelo: %v", err)
+			}
+		}
+	})
 }
 
 func (a *App) acquireSingleInstanceLock() error {

@@ -15,8 +15,12 @@ func main() {
 	workDir, _ := os.Getwd()
 	exeDir := filepath.Dir(exePath)
 	projectDir := filepath.Dir(exeDir)
+	storageRoot, storageErr := resolveAppStorageRoot()
+	if storageErr != nil {
+		log.Fatal(storageErr)
+	}
 
-	if err := initApplicationLogger([]string{workDir, projectDir, exeDir, filepath.Join(exeDir, "backend")}); err != nil {
+	if err := initApplicationLogger([]string{storageRoot, workDir, projectDir, exeDir, filepath.Join(exeDir, "backend")}); err != nil {
 		log.Fatal(err)
 	}
 	defer runtimeLogger.close()

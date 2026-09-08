@@ -5,4 +5,8 @@ backend/session.json
 app/session.json
 app/backend/auth_sessions.json
 backend/.gocache/
+release/out/
+installer/generated.iss
+installer/generated-model-downloads.iss
+installer/generated-model-copies.iss
 backend/assets/text-ai/*.gguf
