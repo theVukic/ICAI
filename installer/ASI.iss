@@ -8,6 +8,7 @@ AppName=ASI
 AppVersion={#AppVersion}
 AppPublisher=ASI
 DefaultDirName={localappdata}\Programs\ASI
+DisableDirPage=no
 DefaultGroupName=ASI
 OutputDir={#OutputDir}
 OutputBaseFilename=ASI-Setup-v{#AppVersion}
