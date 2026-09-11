@@ -19,6 +19,10 @@ $installerDir = Join-Path $root 'installer'
 $generated = Join-Path $installerDir 'generated.iss'
 $generatedDownloads = Join-Path $installerDir 'generated-model-downloads.iss'
 $generatedCopies = Join-Path $installerDir 'generated-model-copies.iss'
+$generatedUpdate = Join-Path $installerDir 'generated-update.iss'
+$generatedUpdateDownloads = Join-Path $installerDir 'generated-update-model-downloads.iss'
+$generatedUpdateCopies = Join-Path $installerDir 'generated-update-model-copies.iss'
+$updateResultFile = Join-Path $out 'update-result.json'
 $icon = Join-Path $backend 'icon.png'
 $tag = "v$Version"
 
@@ -58,6 +62,19 @@ function Ensure-InnoSetup {
         if (Test-Path -LiteralPath $candidate) { return $candidate }
     }
     throw 'Inno Setup compiler nije pronađen nakon instalacije. Instalirajte Inno Setup 7 pa ponovite release.'
+}
+
+function Get-VisualCppRedistributable([string]$Destination) {
+    # ONNX Runtime is linked against the Microsoft Visual C++ runtime. A clean
+    # Windows VM does not necessarily include it, even when onnxruntime.dll is
+    # present beside ASI.exe.
+    Info 'Preuzimam Microsoft Visual C++ Runtime (x64) za installer.'
+    Invoke-WebRequest -Uri 'https://aka.ms/vc14/vc_redist.x64.exe' -OutFile $Destination
+    $signature = Get-AuthenticodeSignature -FilePath $Destination
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+        Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+        throw 'Microsoft Visual C++ Runtime potpis nije validan.'
+    }
 }
 
 function Choose-Content {
@@ -108,22 +125,112 @@ function Choose-ExtraContent([string]$ExtrasRoot) {
     }
 }
 
+# Extra folders are product content, not content belonging only to the release
+# in which they were first selected. Restore the newest cumulative extras
+# archive before asking for additional files, so every later full setup keeps
+# e.g. an AS extension folder that was selected for v0.0.1.
+function Restore-PreviousExtras([string]$ExtrasRoot) {
+    $history = & gh api "repos/$ReleaseRepo/releases?per_page=100" 2>$null | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) {
+        if ($DryRun) {
+            Info 'Dry-run: prethodni dodatni sadržaj nije dostupan bez GitHub veze.'
+            return
+        }
+        throw 'Nije moguće provjeriti ranije dodatne fajlove na GitHub releaseu.'
+    }
+    foreach ($release in $history) {
+        $asset = @($release.assets | Where-Object { [string]$_.name -like 'ASI-extras-*.zip' }) | Select-Object -First 1
+        if ($null -eq $asset) { continue }
+
+        $temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) ("asi-extras-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $temporaryDirectory | Out-Null
+        try {
+            Info "Preuzimam dodatni sadržaj iz ranijeg releasea $($release.tag_name)."
+            & gh release download ([string]$release.tag_name) --repo $ReleaseRepo --pattern ([string]$asset.name) --dir $temporaryDirectory
+            if ($LASTEXITCODE -ne 0) { throw "Dodatni sadržaj iz releasea $($release.tag_name) nije preuzet." }
+            $archive = Join-Path $temporaryDirectory ([string]$asset.name)
+            if (-not (Test-Path -LiteralPath $archive)) { throw "Nedostaje preuzeti dodatni sadržaj: $($asset.name)" }
+            & 7z x $archive ("-o$ExtrasRoot") '-y' | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Dodatni sadržaj iz releasea $($release.tag_name) nije moguće raspakovati." }
+        } finally {
+            if (Test-Path -LiteralPath $temporaryDirectory) { Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force }
+        }
+        return
+    }
+    Info 'Nema ranijeg dodatnog sadržaja za nasljeđivanje.'
+}
+
 Require git; Require go; Require npm; Require gh; Require 7z
 $iscc = Ensure-InnoSetup
 $content = Choose-Content
 $extrasRoot = Join-Path $out 'extras'
 if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $out | Out-Null
+if (-not $DryRun) { Ensure-GitHubLogin }
+Restore-PreviousExtras $extrasRoot
 Choose-ExtraContent $extrasRoot
+$vcRedist = Join-Path $out 'vc_redist.x64.exe'
+Get-VisualCppRedistributable $vcRedist
 if ([string]::IsNullOrWhiteSpace($ReleaseNotes) -and -not [string]::IsNullOrWhiteSpace($ReleaseNotesFile)) { $ReleaseNotes = Get-Content -Raw -LiteralPath $ReleaseNotesFile }
 if ([string]::IsNullOrWhiteSpace($ReleaseNotes)) { $ReleaseNotes = Read-Host 'Release poruka za korisnike (npr. Ispravljen login bug)' }
 if ([string]::IsNullOrWhiteSpace($ReleaseNotes)) { $ReleaseNotes = "ASI $tag" }
 
-if (-not $DryRun) { Ensure-GitHubLogin }
+$previousTag = ''
+$previousAssets = @{}
+$previousModelAssets = @{}
+$historicalModelAssets = @{}
+if (-not $DryRun) {
+    # GitHub exposes a SHA-256 digest for release assets. Keep unchanged large
+    # models in their old release instead of uploading gigabytes again.
+    try {
+        $previousRelease = (& gh release view --repo $ReleaseRepo --json tagName,assets 2>$null | ConvertFrom-Json)
+        $previousTag = [string]$previousRelease.tagName
+        foreach ($asset in $previousRelease.assets) { $previousAssets[[string]$asset.name] = $asset }
+        # A model can live in v0.0.1 while v0.0.2 only references it. Build a
+        # small hash index across releases so later patches never re-upload it.
+        $releaseHistory = (& gh api "repos/$ReleaseRepo/releases?per_page=100" 2>$null | ConvertFrom-Json)
+        foreach ($release in $releaseHistory) {
+            foreach ($asset in $release.assets) {
+                $digest = ([string]$asset.digest).ToLowerInvariant()
+                if ($digest.StartsWith('sha256:')) {
+                    $historicalModelAssets[([string]$asset.name + '|' + $digest)] = "https://github.com/$ReleaseRepo/releases/download/$($release.tag_name)/$($asset.name)"
+                }
+            }
+        }
+        $indexDir = Join-Path ([IO.Path]::GetTempPath()) ("asi-model-index-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $indexDir | Out-Null
+        & gh release download $previousTag --repo $ReleaseRepo --pattern 'models-index.json' --dir $indexDir 2>$null
+        $indexPath = Join-Path $indexDir 'models-index.json'
+        if (Test-Path -LiteralPath $indexPath) {
+            $previousIndex = Get-Content -Raw -LiteralPath $indexPath | ConvertFrom-Json
+            foreach ($model in $previousIndex.models) { $previousModelAssets[[string]$model.name] = $model }
+        }
+        Info "Prethodni release za provjeru asseta: $previousTag"
+    } catch {
+        Info 'Nema prethodnog release indeksa; modeli će biti poslani prvi put.'
+    }
+}
+
+function Reuse-PreviousAssetUrl([string]$Name, [string]$Hash) {
+    if ($previousModelAssets.ContainsKey($Name)) {
+        $indexed = $previousModelAssets[$Name]
+        if (([string]$indexed.sha256).ToLowerInvariant() -eq $Hash.ToLowerInvariant()) { return [string]$indexed.url }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($previousTag) -and $previousAssets.ContainsKey($Name)) {
+        $digest = ([string]$previousAssets[$Name].digest).ToLowerInvariant()
+        if ($digest -eq ('sha256:' + $Hash).ToLowerInvariant()) { return "https://github.com/$ReleaseRepo/releases/download/$previousTag/$Name" }
+    }
+    $historyKey = $Name + '|sha256:' + $Hash.ToLowerInvariant()
+    if ($historicalModelAssets.ContainsKey($historyKey)) { return [string]$historicalModelAssets[$historyKey] }
+    return ''
+}
+
 Info "Buildam ASI v$Version"
 Push-Location $backend
 go test ./...
+$testsExitCode = $LASTEXITCODE
 Pop-Location
+if ($testsExitCode -ne 0) { throw 'Automatski testovi nisu prošli. Release je zaustavljen prije builda.' }
 # A dry run creates a local test installer only; it must never require the
 # private signing certificate or its password. Keep this explicit instead of
 # splatting a switch, because PowerShell can treat a trailing array value as a
@@ -144,16 +251,33 @@ $assets.Add((Join-Path $out 'ASI.exe')); $assets.Add((Join-Path $out 'ASI-Update
 
 $modelDownloads = New-Object System.Collections.Generic.List[string]
 $modelCopies = New-Object System.Collections.Generic.List[string]
+$updateModelDownloads = New-Object System.Collections.Generic.List[string]
+$updateModelCopies = New-Object System.Collections.Generic.List[string]
+$modelComponents = New-Object System.Collections.Generic.List[object]
+$modelIndexEntries = New-Object System.Collections.Generic.List[object]
 $qwenPartCount = 0
 $qwenHash = ''
 function Add-Model([string]$Id, [string]$Source, [string]$TargetName) {
     if (-not (Test-Path $Source)) { throw "Model nedostaje: $Source" }
-    Copy-Item $Source (Join-Path $out $TargetName) -Force
-    $assets.Add((Join-Path $out $TargetName))
-    $hash = HashOf (Join-Path $out $TargetName)
-    $url = "https://github.com/$ReleaseRepo/releases/download/$tag/$TargetName"
+    $hash = HashOf $Source
+    $url = Reuse-PreviousAssetUrl $TargetName $hash
+    if ([string]::IsNullOrWhiteSpace($url)) {
+        Copy-Item $Source (Join-Path $out $TargetName) -Force
+        $assets.Add((Join-Path $out $TargetName))
+        $url = "https://github.com/$ReleaseRepo/releases/download/$tag/$TargetName"
+        Info "Model je promijenjen ili nov: $TargetName"
+    } else {
+        Info "Model je nepromijenjen; ne uploadujem ponovo: $TargetName"
+    }
     $modelDownloads.Add("  DownloadPage.Add('$url', '$TargetName', '$hash');")
     $modelCopies.Add("  CopyFile(ExpandConstant('{tmp}\\$TargetName'), ExpandConstant('{app}\\models\\$TargetName'), False);")
+    $updateModelDownloads.Add("  if CompareText(GetSHA256OfFile(ExpandConstant('{app}\\models\\$TargetName')), '$hash') <> 0 then begin")
+    $updateModelDownloads.Add("    DownloadPage.Add('$url', '$TargetName', '$hash');")
+    $updateModelDownloads.Add('    ModelDownloadCount := ModelDownloadCount + 1;')
+    $updateModelDownloads.Add('  end;')
+    $updateModelCopies.Add("  if FileExists(ExpandConstant('{tmp}\\$TargetName')) then CopyFile(ExpandConstant('{tmp}\\$TargetName'), ExpandConstant('{app}\\models\\$TargetName'), False);")
+    $modelComponents.Add(@{ id = "image-model-$Id"; url = $url; sha256 = $hash; size = (Get-Item $Source).Length })
+    $modelIndexEntries.Add(@{ name = $TargetName; sha256 = $hash; url = $url })
 }
 if ($content.ImageAI) {
     Add-Model 'u2net' (Join-Path $backend 'assets\image-ai\u2net.onnx') 'u2net.onnx'
@@ -173,8 +297,6 @@ if ($content.TextAI) {
                 if ($output) { $output.Dispose() }
                 $name = ('Qwen3-4B-Q4_K_M.part{0:d3}' -f $part)
                 $output = [System.IO.File]::Open((Join-Path $out $name), [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)
-                $assets.Add((Join-Path $out $name))
-                $hash = $null
                 $part += 1; $written = 0
             }
             $output.Write($buffer, 0, $read); $written += $read
@@ -182,30 +304,77 @@ if ($content.TextAI) {
         if ($output) { $output.Dispose() }
         $qwenPartCount = $part - 1
     } finally { $input.Dispose() }
+    $qwenUpdateDownloads = New-Object System.Collections.Generic.List[string]
     for ($index = 1; $index -le $qwenPartCount; $index++) {
         $name = ('Qwen3-4B-Q4_K_M.part{0:d3}' -f $index)
-        $modelDownloads.Add("  DownloadPage.Add('https://github.com/$ReleaseRepo/releases/download/$tag/$name', '$name', '$(HashOf (Join-Path $out $name))');")
+        $partPath = Join-Path $out $name
+        $partHash = HashOf $partPath
+        $partURL = Reuse-PreviousAssetUrl $name $partHash
+        if ([string]::IsNullOrWhiteSpace($partURL)) {
+            $assets.Add($partPath)
+            $partURL = "https://github.com/$ReleaseRepo/releases/download/$tag/$name"
+            Info "Qwen dio je promijenjen ili nov: $name"
+        } else {
+            Remove-Item -LiteralPath $partPath -Force
+            Info "Qwen dio je nepromijenjen; ne uploadujem ponovo: $name"
+        }
+        $modelDownloads.Add("  DownloadPage.Add('$partURL', '$name', '$partHash');")
+        $qwenUpdateDownloads.Add("    DownloadPage.Add('$partURL', '$name', '$partHash');")
+        $qwenUpdateDownloads.Add('    ModelDownloadCount := ModelDownloadCount + 1;')
+        $modelIndexEntries.Add(@{ name = $name; sha256 = $partHash; url = $partURL })
+    }
+    if ($qwenPartCount -gt 0) {
+        $updateModelDownloads.Add("  if CompareText(GetSHA256OfFile(ExpandConstant('{app}\\models\\Qwen3-4B-Q4_K_M.gguf')), '$qwenHash') <> 0 then begin")
+        foreach ($line in $qwenUpdateDownloads) { $updateModelDownloads.Add($line) }
+        $updateModelDownloads.Add('  end;')
     }
 }
 
 $modelDownloads | Set-Content -LiteralPath $generatedDownloads -Encoding utf8
 $modelCopies | Set-Content -LiteralPath $generatedCopies -Encoding utf8
+$updateModelDownloads | Set-Content -LiteralPath $generatedUpdateDownloads -Encoding utf8
+$updateModelCopies | Set-Content -LiteralPath $generatedUpdateCopies -Encoding utf8
 $skipModelDownload = if ($DryRun) { 1 } else { 0 }
 @"
 #define AppVersion "$Version"
 #define OutputDir "$out"
 #define StageDir "$stage"
 #define ExtrasDir "$extrasRoot"
+#define VCRedist "$vcRedist"
 #define SkipModelDownload $skipModelDownload
 #define QwenPartCount $qwenPartCount
 #define QwenHash "$qwenHash"
 "@ | Set-Content -LiteralPath $generated -Encoding utf8
+
+@"
+#define AppVersion "$Version"
+#define OutputDir "$out"
+#define StageDir "$stage"
+#define ExtrasDir "$extrasRoot"
+#define VCRedist "$vcRedist"
+#define UpdateResultFile "$updateResultFile"
+#define QwenPartCount $qwenPartCount
+#define QwenHash "$qwenHash"
+"@ | Set-Content -LiteralPath $generatedUpdate -Encoding utf8
+
+@{ version = $Version; notes = $ReleaseNotes } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $updateResultFile -Encoding utf8
 
 Info 'Pravim ASI-Setup.exe'
 & $iscc (Join-Path $installerDir 'ASI.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Installer build nije uspio.' }
 $setup = Join-Path $out "ASI-Setup-v$Version.exe"
 $assets.Add($setup)
+
+Info 'Pravim Inno Setup updater.'
+& $iscc (Join-Path $installerDir 'ASI-Update.iss')
+if ($LASTEXITCODE -ne 0) { throw 'Update installer build nije uspio.' }
+$updateSetup = Join-Path $out "ASI-Update-Setup-v$Version.exe"
+$assets.Add($updateSetup)
+
+# This tiny immutable index carries forward URLs for unchanged model assets.
+# Thus a later release only needs to read the immediately preceding index.
+@{ models = $modelIndexEntries } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $out 'models-index.json') -Encoding utf8
+$assets.Add((Join-Path $out 'models-index.json'))
 
 if ($DryRun) {
     Info "Dry run gotov. Installer: $setup"
@@ -222,6 +391,13 @@ if ((Get-ChildItem $extrasRoot -Recurse -File -ErrorAction SilentlyContinue).Cou
 }
 & gh release create $tag --repo $ReleaseRepo --draft --title "ASI $tag" --notes $ReleaseNotes $assets.ToArray()
 if ($LASTEXITCODE -ne 0) { throw 'GitHub draft release nije napravljen.' }
+$draftAssets = ((& gh release view $tag --repo $ReleaseRepo --json assets | ConvertFrom-Json).assets | ForEach-Object { [string]$_.name })
+if ($draftAssets -notcontains (Split-Path -Leaf $setup)) {
+    throw 'Draft release nema ASI-Setup.exe fallback. Release neće biti objavljen.'
+}
+if ($draftAssets -notcontains (Split-Path -Leaf $updateSetup)) {
+    throw 'Draft release nema Inno Setup updater. Release neće biti objavljen.'
+}
 
 $components = @(
     @{ id = 'app'; url = "https://github.com/$ReleaseRepo/releases/download/$tag/ASI.exe"; sha256 = HashOf (Join-Path $out 'ASI.exe'); size = (Get-Item (Join-Path $out 'ASI.exe')).Length },
@@ -229,11 +405,8 @@ $components = @(
     @{ id = 'frontend'; url = "https://github.com/$ReleaseRepo/releases/download/$tag/ASI-frontend-$tag.zip"; sha256 = HashOf (Join-Path $out "ASI-frontend-$tag.zip"); size = (Get-Item (Join-Path $out "ASI-frontend-$tag.zip")).Length }
 )
 if (Test-Path (Join-Path $out "ASI-extras-$tag.zip")) { $components += @{ id = 'extras'; url = "https://github.com/$ReleaseRepo/releases/download/$tag/ASI-extras-$tag.zip"; sha256 = HashOf (Join-Path $out "ASI-extras-$tag.zip"); size = (Get-Item (Join-Path $out "ASI-extras-$tag.zip")).Length } }
-if ($content.ImageAI) {
-    $components += @{ id = 'image-model-u2net'; url = "https://github.com/$ReleaseRepo/releases/download/$tag/u2net.onnx"; sha256 = HashOf (Join-Path $out 'u2net.onnx'); size = (Get-Item (Join-Path $out 'u2net.onnx')).Length }
-    $components += @{ id = 'image-model-birefnet'; url = "https://github.com/$ReleaseRepo/releases/download/$tag/birefnet-general.onnx"; sha256 = HashOf (Join-Path $out 'birefnet-general.onnx'); size = (Get-Item (Join-Path $out 'birefnet-general.onnx')).Length }
-}
-@{ version = $Version; notes = $ReleaseNotes; components = $components } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $out 'latest.json') -Encoding utf8
+if ($content.ImageAI) { $components += $modelComponents.ToArray() }
+@{ version = $Version; notes = $ReleaseNotes; components = $components; updateSetup = @{ url = "https://github.com/$ReleaseRepo/releases/download/$tag/$(Split-Path -Leaf $updateSetup)"; sha256 = HashOf $updateSetup; size = (Get-Item $updateSetup).Length } } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $out 'latest.json') -Encoding utf8
 & gh release upload $tag (Join-Path $out 'latest.json') --repo $ReleaseRepo
 & gh release edit $tag --draft=false --latest --repo $ReleaseRepo
 git tag $tag; git push origin HEAD; git push origin $tag

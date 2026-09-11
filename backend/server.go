@@ -171,6 +171,16 @@ func (a *App) imageProcessingIsEnabled() bool {
 
 func (a *App) setImageProcessingEnabled(enabled bool, retry bool) {
 	a.aiProcessingMu.Lock()
+	// Retry must never cancel the item that is currently being generated. The
+	// old behaviour created a new generation and cleared the FIFO, so clicking
+	// retry for one malformed description silently discarded other products.
+	if retry && enabled && a.aiProcessingEnabled {
+		generation := a.aiGeneration
+		a.aiProcessingMu.Unlock()
+		a.descriptionProcessor.ResetFailure()
+		a.retryFailedAI(generation)
+		return
+	}
 	// The browser synchronizes this setting after every page refresh. Keeping
 	// the running generation intact is essential: cancelling it here left cards
 	// stuck at "AI obrađuje" while their jobs had already been discarded.
@@ -287,6 +297,28 @@ func (a *App) enqueueUnprocessedAI(generation uint64) {
 	}
 }
 
+// retryFailedAI only puts failed items back into the queue. Existing queued
+// and processing work belongs to the current generation and must continue.
+func (a *App) retryFailedAI(generation uint64) {
+	for _, item := range a.store.State().Items {
+		_, imageProgress := a.store.ProcessedImage(item.ItemID)
+		descriptionProgress := a.store.DescriptionProcessing(item.ItemID)
+		shouldRetry := false
+		if imageProgress.Status == "error" {
+			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "queued"})
+			shouldRetry = true
+		}
+		if descriptionProgress.Status == "error" {
+			a.store.SetDescriptionProcessingStatus(item.ItemID, DescriptionProcessingItem{Status: "queued"})
+			shouldRetry = true
+		}
+		if shouldRetry {
+			a.aiQueue.Push(aiCatalogJob{ItemID: item.ItemID, Generation: generation})
+			logEvent("ai-processing", "failed item requeued", map[string]any{"item_id": item.ItemID})
+		}
+	}
+}
+
 func (a *App) resumeIncompleteAIWork(generation uint64) {
 	for _, item := range a.store.State().Items {
 		_, imageProgress := a.store.ProcessedImage(item.ItemID)
@@ -332,6 +364,10 @@ func (a *App) processAIQueue() {
 				}
 				if imageErr != nil {
 					a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: imageErr.Error()})
+					logEvent("ai-image", "image processing failed", map[string]any{
+						"item_id": item.ItemID,
+						"error":   imageErr.Error(),
+					})
 				} else {
 					a.store.SetProcessedImageWithModel(item.ItemID, result, model)
 				}
@@ -350,6 +386,10 @@ func (a *App) processAIQueue() {
 			}
 			if descriptionErr != nil {
 				a.store.SetDescriptionProcessingStatus(item.ItemID, DescriptionProcessingItem{Status: "error", Error: descriptionErr.Error(), Model: descriptionModelName})
+				logEvent("ai-description", "description generation failed", map[string]any{
+					"item_id": item.ItemID,
+					"error":   descriptionErr.Error(),
+				})
 				continue
 			}
 			if err := a.store.SetGeneratedDescription(item.ItemID, description, source, descriptionModelName); err != nil {

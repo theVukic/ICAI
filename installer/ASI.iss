@@ -32,8 +32,10 @@ Source: "{#StageDir}\ASI-Updater.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\dist\*"; DestDir: "{app}\dist"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StageDir}\models\*.dll"; DestDir: "{app}\models"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#StageDir}\models\*.exe"; DestDir: "{app}\models"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#StageDir}\background\*"; DestDir: "{app}\background"; Flags: onlyifdoesntexist recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "{#StageDir}\defaults\*"; DestDir: "{localappdata}\ASIapp"; Flags: onlyifdoesntexist recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "{#ExtrasDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+Source: "{#VCRedist}"; Flags: dontcopy
 
 [Icons]
 Name: "{group}\ASI"; Filename: "{app}\ASI.exe"
@@ -174,6 +176,33 @@ begin
   end;
 end;
 
+function HasVisualCppRuntime(): Boolean;
+var
+  Installed: Cardinal;
+begin
+  // The supported VC++ x64 installer records this value after a successful
+  // install. Reading the registry is allowed for a per-user ASI install and
+  // avoids launching the redistributable again on every setup/update.
+  Result := RegQueryDWordValue(HKLM64, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Installed', Installed) and (Installed = 1);
+end;
+
+procedure InstallVisualCppRuntime();
+var
+  ResultCode: Integer;
+begin
+  if HasVisualCppRuntime() then begin
+    Log('Microsoft Visual C++ Runtime (x64) je već instaliran; preskačem.');
+    Exit;
+  end;
+  ExtractTemporaryFile('vc_redist.x64.exe');
+  if not Exec(ExpandConstant('{tmp}\vc_redist.x64.exe'), '/install /quiet /norestart', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    RaiseException('Microsoft Visual C++ Runtime nije moguće pokrenuti.');
+  // 0 = installed/already current; 1638 = newer version already installed;
+  // 3010 = installed and Windows reports that a restart is recommended.
+  if (ResultCode <> 0) and (ResultCode <> 1638) and (ResultCode <> 3010) then
+    RaiseException('Microsoft Visual C++ Runtime instalacija nije uspjela (kod ' + IntToStr(ResultCode) + ').');
+end;
+
 procedure JoinQwenModel(); forward;
 
 procedure CopyDownloadedModels();
@@ -205,7 +234,7 @@ begin
   finally
     OutputStream.Free;
   end;
-  if GetSHA256OfFile(FinalPath + '.tmp') <> '{#QwenHash}' then begin
+  if CompareText(GetSHA256OfFile(FinalPath + '.tmp'), '{#QwenHash}') <> 0 then begin
     DeleteFile(FinalPath + '.tmp');
     RaiseException('Provjera Qwen modela nije uspjela.');
   end;
@@ -224,6 +253,7 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   try
+    InstallVisualCppRuntime();
     DownloadModels();
     CopyDownloadedModels();
   except

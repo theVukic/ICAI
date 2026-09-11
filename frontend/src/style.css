@@ -1630,6 +1630,14 @@ button {
     min-height: 0;
 }
 
+.update-toast { display: grid; gap: 8px; min-width: 280px; }
+.update-toast span { font-size: 13px; line-height: 1.35; }
+.version-toast { display: grid; gap: 4px; min-width: 180px; }
+.version-toast span { font-size: 13px; opacity: .94; }
+.update-toast-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.update-toast-actions button { border: 1px solid rgba(255,255,255,.45); border-radius: 7px; background: rgba(0,0,0,.16); color: inherit; padding: 6px 10px; cursor: pointer; font: inherit; font-size: 12px; }
+.update-toast-actions button:last-child { background: #238f47; border-color: #238f47; }
+
 .product-body h3 {
     margin: 0;
     font-size: 1.05rem;

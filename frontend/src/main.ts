@@ -112,6 +112,7 @@ type UpdateStatus = {
   available: boolean;
   updated?: boolean;
   version?: string;
+  currentVersion: string;
   notes?: string;
   error?: string;
   nonce: string;
@@ -180,6 +181,7 @@ let authPollTimer: number | null = null;
 let loadStateInFlight: Promise<void> | null = null;
 const descriptionPreviewScrollPositions = new Map<string, number>();
 let updatePromptShown = false;
+let versionToastShown = false;
 
 const notyf = new Notyf({
   duration: 0,
@@ -192,6 +194,20 @@ const notyf = new Notyf({
       background: "linear-gradient(135deg, #d6a62f, #b88310)",
       icon: false,
       className: "notyf__toast--warning",
+    },
+    {
+      type: "update",
+      background: "linear-gradient(135deg, #1976d2, #0d47a1)",
+      icon: false,
+      className: "notyf__toast--update",
+      dismissible: false,
+    },
+    {
+      type: "version",
+      background: "linear-gradient(135deg, #1976d2, #0d47a1)",
+      icon: false,
+      className: "notyf__toast--version",
+      dismissible: true,
     },
   ],
 });
@@ -2076,7 +2092,7 @@ function renderAIProcessingStatuses(item: AIProcessingItem): string {
   const statuses: Array<{ label: string; tone: string }> = [];
   if (item.image.status === "processing") statuses.push({ label: "AI obrađuje sliku", tone: "processing" });
   else if (item.image.status === "done") statuses.push({ label: "Slika gotova", tone: "done" });
-  else if (item.image.status === "error") statuses.push({ label: "Slika nije obrađena", tone: "error" });
+  else if (item.image.status === "error") statuses.push({ label: item.image.error ? `Slika: ${item.image.error}` : "Slika nije obrađena", tone: "error" });
   else statuses.push({ label: "Čeka AI obradu slike", tone: "queued" });
 
   if (item.description.status === "processing") statuses.push({ label: "AI obrađuje opis", tone: "processing" });
@@ -2697,6 +2713,7 @@ async function initializeUpdatePrompt(): Promise<void> {
       if (response.ok) {
         const status = (await response.json()) as UpdateStatus;
         if (status.checked) {
+          showVersionToast(status.currentVersion);
           if (status.updated && status.version) {
             showUpdateComplete(status);
           }
@@ -2713,23 +2730,17 @@ async function initializeUpdatePrompt(): Promise<void> {
   }
 }
 
+function showVersionToast(version: string): void {
+  if (versionToastShown) return;
+  versionToastShown = true;
+  notyf.open({
+    type: "version",
+    message: `<div class="version-toast"><strong>ASI verzija</strong><span>v${escapeHtml(version || "nepoznata")}</span></div>`,
+  });
+}
+
 function showUpdateComplete(status: UpdateStatus): void {
-  const overlay = document.createElement("div");
-  overlay.className = "update-overlay";
-  overlay.innerHTML = `
-    <section class="update-dialog update-dialog-complete" role="dialog" aria-modal="true" aria-labelledby="updateCompleteTitle">
-      <div class="update-dialog-icon" aria-hidden="true">✓</div>
-      <span class="update-dialog-eyebrow">AŽURIRANJE ZAVRŠENO</span>
-      <h1 id="updateCompleteTitle">ASI je ažuriran</h1>
-      <p>Uspješno je instalirana verzija <strong>v${escapeHtml(status.version || "")}</strong>.</p>
-      ${status.notes ? `<div class="update-dialog-notes">${escapeHtml(status.notes)}</div>` : ""}
-      <div class="update-dialog-actions"><button type="button" class="update-accept">U redu</button></div>
-    </section>
-  `;
-  document.body.appendChild(overlay);
-  const button = overlay.querySelector<HTMLButtonElement>("button");
-  button?.focus();
-  button?.addEventListener("click", () => overlay.remove());
+  notyf.success(`ASI je ažuriran na v${status.version || ""}.${status.notes ? ` ${status.notes}` : ""}`);
 }
 
 function showUpdatePrompt(status: UpdateStatus): void {
@@ -2737,32 +2748,19 @@ function showUpdatePrompt(status: UpdateStatus): void {
     return;
   }
   updatePromptShown = true;
-  const overlay = document.createElement("div");
-  overlay.className = "update-overlay";
-  overlay.innerHTML = `
-    <section class="update-dialog" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
-      <div class="update-dialog-icon" aria-hidden="true">↑</div>
-      <span class="update-dialog-eyebrow">NOVA VERZIJA</span>
-      <h1 id="updateTitle">Dostupno je ažuriranje</h1>
-      <p>Nova verzija ASI <strong>v${escapeHtml(status.version || "")}</strong> je dostupna. Da li želite ažurirati aplikaciju?</p>
-      ${status.notes ? `<div class="update-dialog-notes">${escapeHtml(status.notes)}</div>` : ""}
-      <div class="update-dialog-actions">
-        <button type="button" class="update-decline">Ne</button>
-        <button type="button" class="update-accept">Da, ažuriraj</button>
-      </div>
-    </section>
-  `;
-  document.body.appendChild(overlay);
-
-  const decline = overlay.querySelector<HTMLButtonElement>(".update-decline");
-  const accept = overlay.querySelector<HTMLButtonElement>(".update-accept");
-  decline?.focus();
+  const toastID = `update-${status.nonce}`;
+  notyf.open({
+    type: "update",
+    message: `<div class="update-toast" data-update-toast="${escapeHtml(toastID)}"><strong>Dostupno je ažuriranje v${escapeHtml(status.version || "")}</strong><span>${status.notes ? escapeHtml(status.notes) : "Da li želite ažurirati aplikaciju?"}</span><div class="update-toast-actions"><button type="button" data-update-decline="${escapeHtml(toastID)}">Ne</button><button type="button" data-update-accept="${escapeHtml(toastID)}">Da, ažuriraj</button></div></div>`,
+  });
+  const decline = document.querySelector<HTMLButtonElement>(`[data-update-decline="${CSS.escape(toastID)}"]`);
+  const accept = document.querySelector<HTMLButtonElement>(`[data-update-accept="${CSS.escape(toastID)}"]`);
   decline?.addEventListener("click", async () => {
     await fetch("/api/update/decline", {
       method: "POST",
       headers: { "X-ASI-Update-Nonce": status.nonce },
     }).catch(() => undefined);
-    overlay.remove();
+    decline?.closest(".notyf__toast")?.remove();
   });
   accept?.addEventListener("click", async () => {
     if (!accept || !decline) return;
@@ -2775,7 +2773,7 @@ function showUpdatePrompt(status: UpdateStatus): void {
         headers: { "X-ASI-Update-Nonce": status.nonce },
       });
       if (!response.ok) throw new Error("Updater nije pokrenut.");
-      overlay.querySelector("p")!.textContent = "ASI se zatvara i ažuriranje počinje u zasebnom prozoru.";
+      accept.closest(".notyf__toast")?.remove();
     } catch (error) {
       accept.disabled = false;
       decline.disabled = false;

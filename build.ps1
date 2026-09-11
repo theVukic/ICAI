@@ -1,7 +1,8 @@
 param(
     [string]$Version = "0.0.0-dev",
     [string]$UpdateManifestURL = "",
-    [switch]$SkipSign
+    [switch]$SkipSign,
+    [switch]$RefreshResources
 )
 
 $ErrorActionPreference = "Stop"
@@ -66,6 +67,7 @@ $backendExePath = Join-Path $backendDir "ASI.exe"
 $legacyBackendExePath = Join-Path $backendDir "backend.exe"
 $previousBackendExePath = Join-Path $backendDir "ICAI.exe"
 $iconPath = Join-Path $backendDir "icon.png"
+$windowsResourcePath = Join-Path $backendDir "rsrc_windows_amd64.syso"
 $aiAssetsDir = Join-Path $backendDir "assets\image-ai"
 $aiModelPath = Join-Path $aiAssetsDir "u2net.onnx"
 $detailedAIModelPath = Join-Path $aiAssetsDir "birefnet-general.onnx"
@@ -190,16 +192,20 @@ try {
         Remove-Item -Force $previousBackendExePath
     }
 
-    Log "Generating Windows resources from app icon"
     Push-Location $backendDir
-    & $goWinResPath simply `
-        --arch amd64 `
-        --icon $iconPath `
-        --product-name "ASI" `
-        --file-description "ASI desktop application" `
-        --original-filename "ASI.exe"
-    if ($LASTEXITCODE -ne 0) {
-        throw "Windows resource generation failed"
+    if ($RefreshResources -or !(Test-Path $windowsResourcePath)) {
+        Log "Generating Windows resources from app icon"
+        & $goWinResPath simply `
+            --arch amd64 `
+            --icon $iconPath `
+            --product-name "ASI" `
+            --file-description "ASI desktop application" `
+            --original-filename "ASI.exe"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Windows resource generation failed"
+        }
+    } else {
+        Log "Using existing Windows resources (use -RefreshResources after changing the icon)"
     }
 
     Log "Building Go executable to app/ASI.exe with release flags"

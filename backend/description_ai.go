@@ -362,9 +362,64 @@ func decodeGeneratedDescription(content string) (generatedDescription, error) {
 	}
 	var generated generatedDescription
 	if err := json.Unmarshal([]byte(object), &generated); err != nil {
-		return generatedDescription{}, err
+		// Small local models occasionally emit literal line breaks/tabs inside a
+		// JSON string, or a trailing comma before ]/}. Repair only those JSON
+		// formatting defects and still strictly decode the resulting object.
+		repaired := repairModelJSON(object)
+		if repaired == object {
+			return generatedDescription{}, err
+		}
+		if repairedErr := json.Unmarshal([]byte(repaired), &generated); repairedErr != nil {
+			return generatedDescription{}, repairedErr
+		}
 	}
 	return generated, nil
+}
+
+func repairModelJSON(value string) string {
+	var output strings.Builder
+	output.Grow(len(value) + 16)
+	inString := false
+	escaped := false
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if inString {
+			if escaped {
+				escaped = false
+				output.WriteByte(character)
+				continue
+			}
+			if character == '\\' {
+				escaped = true
+				output.WriteByte(character)
+				continue
+			}
+			if character == '"' {
+				inString = false
+				output.WriteByte(character)
+				continue
+			}
+			switch character {
+			case '\n':
+				output.WriteString(`\n`)
+			case '\r':
+				output.WriteString(`\r`)
+			case '\t':
+				output.WriteString(`\t`)
+			default:
+				output.WriteByte(character)
+			}
+			continue
+		}
+		if character == '"' {
+			inString = true
+		}
+		output.WriteByte(character)
+	}
+
+	// Remove a comma followed only by whitespace and a closing JSON delimiter.
+	// Models can produce every variant: `,]`, `, }`, or a newline between them.
+	return regexp.MustCompile(`,\s*([}\]])`).ReplaceAllString(output.String(), "$1")
 }
 
 func firstJSONObject(value string) (string, bool) {

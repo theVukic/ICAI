@@ -33,13 +33,14 @@ type updateManifest struct {
 }
 
 type updateStatus struct {
-	Checked   bool   `json:"checked"`
-	Available bool   `json:"available"`
-	Updated   bool   `json:"updated"`
-	Version   string `json:"version,omitempty"`
-	Notes     string `json:"notes,omitempty"`
-	Error     string `json:"error,omitempty"`
-	Nonce     string `json:"nonce"`
+	Checked        bool   `json:"checked"`
+	Available      bool   `json:"available"`
+	Updated        bool   `json:"updated"`
+	Version        string `json:"version,omitempty"`
+	CurrentVersion string `json:"currentVersion"`
+	Notes          string `json:"notes,omitempty"`
+	Error          string `json:"error,omitempty"`
+	Nonce          string `json:"nonce"`
 }
 
 type updateManager struct {
@@ -52,7 +53,7 @@ type updateManager struct {
 }
 
 func newUpdateManager(app *App) *updateManager {
-	status := updateStatus{Nonce: randomRuntimeNonce()}
+	status := updateStatus{Nonce: randomRuntimeNonce(), CurrentVersion: AppVersion}
 	if version, notes := readUpdateResult(); version != "" {
 		status.Updated = true
 		status.Version = version
@@ -65,11 +66,12 @@ func (m *updateManager) checkOnce(ctx context.Context) {
 	m.checking.Do(func() {
 		m.mu.RLock()
 		status := updateStatus{
-			Checked: true,
-			Nonce:   m.status.Nonce,
-			Updated: m.status.Updated,
-			Version: m.status.Version,
-			Notes:   m.status.Notes,
+			Checked:        true,
+			Nonce:          m.status.Nonce,
+			Updated:        m.status.Updated,
+			Version:        m.status.Version,
+			CurrentVersion: AppVersion,
+			Notes:          m.status.Notes,
 		}
 		m.mu.RUnlock()
 		manifestURL := strings.TrimSpace(UpdateManifestURL)
@@ -198,7 +200,12 @@ func (a *App) handleUpdateAccept(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]bool{"starting": true})
 	go func() {
 		time.Sleep(350 * time.Millisecond)
-		a.requestShutdown()
+		// First request graceful shutdown so the hidden AI process can stop.
+		// If a WebView/HTTP worker keeps the main process alive, force the old
+		// ASI process out shortly afterwards; otherwise the updater waits forever.
+		go a.requestShutdown()
+		time.Sleep(2 * time.Second)
+		os.Exit(0)
 	}()
 }
 
