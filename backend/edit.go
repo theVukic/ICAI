@@ -172,18 +172,19 @@ func (s *CatalogStore) UpdateItemByID(itemID string, req CatalogItemEditRequest)
 			item.NameB2B = name
 			item.RetailPrice = req.Price
 			// The edit form includes its current description with every save. Do
-			// not mistake that unchanged value for a manual description edit: AI
-			// must keep running while the user changes only name or price.
+			// not mistake that unchanged value for a manual description edit.
+			// When the card's AI switch is active, this field edits the AI variant;
+			// otherwise it edits the supplier/original variant.
 			if descriptionChanged(*item, description) {
-				if s.aiEnabled {
-					item.TechnicalDescription = sanitizeDescriptionHTML(description)
-					item.TechnicalDescriptionFormat = "html"
+				if item.UseAIContent && strings.TrimSpace(item.AITechnicalDescription) != "" {
+					item.AITechnicalDescription = sanitizeDescriptionHTML(description)
+					item.UseAIContent = true
 					s.descriptionItems[itemID] = DescriptionProcessingItem{Status: "done", Source: "manual"}
 				} else {
 					item.TechnicalDescription = description
 					item.OriginalTechnicalDescription = description
 					item.TechnicalDescriptionFormat = "plain"
-					delete(s.descriptionItems, itemID)
+					item.UseAIContent = false
 				}
 			}
 
@@ -199,8 +200,8 @@ func (s *CatalogStore) UpdateItemByID(itemID string, req CatalogItemEditRequest)
 }
 
 func descriptionChanged(item CatalogItem, submitted string) bool {
-	if item.TechnicalDescriptionFormat == "html" {
-		return sanitizeDescriptionHTML(item.TechnicalDescription) != sanitizeDescriptionHTML(submitted)
+	if item.UseAIContent && strings.TrimSpace(item.AITechnicalDescription) != "" {
+		return sanitizeDescriptionHTML(item.AITechnicalDescription) != sanitizeDescriptionHTML(submitted)
 	}
 	return strings.TrimSpace(item.TechnicalDescription) != strings.TrimSpace(submitted)
 }
@@ -295,16 +296,10 @@ func (s *CatalogStore) UpdateItemsBulk(req CatalogBulkEditRequest) ([]CatalogIte
 				item.RetailPrice = *req.Price
 			}
 			if req.Description != nil {
-				if s.aiEnabled {
-					item.TechnicalDescription = sanitizeDescriptionHTML(*req.Description)
-					item.TechnicalDescriptionFormat = "html"
-					s.descriptionItems[item.ItemID] = DescriptionProcessingItem{Status: "done", Source: "manual"}
-				} else {
-					item.TechnicalDescription = *req.Description
-					item.OriginalTechnicalDescription = *req.Description
-					item.TechnicalDescriptionFormat = "plain"
-					delete(s.descriptionItems, item.ItemID)
-				}
+				item.TechnicalDescription = *req.Description
+				item.OriginalTechnicalDescription = *req.Description
+				item.TechnicalDescriptionFormat = "plain"
+				item.UseAIContent = false
 			}
 			if req.CurrencyCode != nil && *req.CurrencyCode != "" {
 				item.CurrencyCode = *req.CurrencyCode
@@ -356,6 +351,7 @@ func (s *CatalogStore) DeleteItemsBulk(itemKeys []string, towKods []string) erro
 				}
 				delete(s.processedImages, item.ItemID)
 				delete(s.processingItems, item.ItemID)
+				delete(s.descriptionItems, item.ItemID)
 				continue
 			}
 

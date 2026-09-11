@@ -25,7 +25,6 @@ type CatalogStore struct {
 	processedImages  map[string]string
 	processingItems  map[string]ImageProcessingItem
 	descriptionItems map[string]DescriptionProcessingItem
-	aiEnabled        bool
 }
 
 var errCatalogAlreadyUploaded = errors.New("fajl je već dodat")
@@ -105,7 +104,7 @@ func (s *CatalogStore) buildStateLocked() CatalogState {
 			processing.Failed++
 		}
 	}
-	aiProcessing := AIProcessingState{Items: make(map[string]AIProcessingItem, len(items)), Enabled: s.aiEnabled}
+	aiProcessing := AIProcessingState{Items: make(map[string]AIProcessingItem, len(items)), Enabled: true}
 	for _, item := range items {
 		imageState := s.processingItems[item.ItemID]
 		descriptionState := s.descriptionItems[item.ItemID]
@@ -131,12 +130,6 @@ func (s *CatalogStore) buildStateLocked() CatalogState {
 		ImageProcessing: processing,
 		AIProcessing:    aiProcessing,
 	}
-}
-
-func (s *CatalogStore) SetAIEnabled(enabled bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.aiEnabled = enabled
 }
 
 func (s *CatalogStore) SetImageProcessingStatus(itemID string, status ImageProcessingItem) {
@@ -176,16 +169,6 @@ func (s *CatalogStore) ProcessedImage(itemID string) (string, ImageProcessingIte
 	return s.processedImages[itemID], s.processingItems[itemID]
 }
 
-func (s *CatalogStore) ResetProcessedImages() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, imagePath := range s.processedImages {
-		_ = os.Remove(imagePath)
-	}
-	s.processedImages = map[string]string{}
-	s.processingItems = map[string]ImageProcessingItem{}
-}
-
 func (s *CatalogStore) SetDescriptionProcessingStatus(itemID string, status DescriptionProcessingItem) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -216,8 +199,8 @@ func (s *CatalogStore) SetGeneratedDescription(itemID, description, source, mode
 			if item.ItemID != itemID {
 				continue
 			}
-			item.TechnicalDescription = strings.TrimSpace(description)
-			item.TechnicalDescriptionFormat = "html"
+			item.AITechnicalDescription = strings.TrimSpace(description)
+			item.UseAIContent = true
 			s.descriptionItems[itemID] = DescriptionProcessingItem{Status: "done", Source: source, Model: model}
 			return s.writeCatalogFile(*catalog)
 		}
@@ -225,37 +208,29 @@ func (s *CatalogStore) SetGeneratedDescription(itemID, description, source, mode
 	return fmt.Errorf("%w: %s", errCatalogItemNotFound, itemID)
 }
 
-func (s *CatalogStore) RestoreOriginalDescriptions() error {
+func (s *CatalogStore) SetAIContentEnabled(itemID string, enabled bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for catalogIndex := range s.catalogs {
 		catalog := &s.catalogs[catalogIndex]
-		changed := false
 		for itemIndex := range catalog.Items {
 			item := &catalog.Items[itemIndex]
-			if item.OriginalTechnicalDescription == "" {
+			if item.ItemID != itemID {
 				continue
 			}
-			item.TechnicalDescription = item.OriginalTechnicalDescription
-			item.TechnicalDescriptionFormat = "plain"
-			changed = true
-		}
-		if changed {
+			item.UseAIContent = enabled
 			if err := s.writeCatalogFile(*catalog); err != nil {
 				return err
 			}
+			return nil
 		}
 	}
-	s.descriptionItems = map[string]DescriptionProcessingItem{}
-	return nil
+	return fmt.Errorf("%w: %s", errCatalogItemNotFound, itemID)
 }
 
 func (s *CatalogStore) AIWorkBlocking(itemKeys, towKods []string) (int, int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if !s.aiEnabled {
-		return 0, 0
-	}
 	targets := newCatalogSelectionTargets(itemKeys, towKods)
 	pending, failed := 0, 0
 	for _, catalog := range s.catalogs {
@@ -263,19 +238,11 @@ func (s *CatalogStore) AIWorkBlocking(itemKeys, towKods []string) (int, int) {
 			if !targets.Empty() && !targets.Match(item) {
 				continue
 			}
-			descriptionStatus := s.descriptionItems[item.ItemID].Status
-			switch descriptionStatus {
-			case "done":
-				// A completed local AI description is always sanitized HTML. Treat a
-				// supplier/plain description as unfinished even if an old in-memory
-				// status was lost or marked done too early.
-				if item.TechnicalDescriptionFormat != "html" {
+			for _, status := range []string{s.processingItems[item.ItemID].Status, s.descriptionItems[item.ItemID].Status} {
+				switch status {
+				case "queued", "processing":
 					pending++
 				}
-			case "error":
-				failed++
-			default:
-				pending++
 			}
 		}
 	}
@@ -350,6 +317,10 @@ func (s *CatalogStore) ReserveItemsForPublish(itemKeys []string, towKods []strin
 			}
 
 			itemCopy := item
+			if itemCopy.UseAIContent && strings.TrimSpace(itemCopy.AITechnicalDescription) != "" {
+				itemCopy.TechnicalDescription = itemCopy.AITechnicalDescription
+				itemCopy.TechnicalDescriptionFormat = "html"
+			}
 			if categorization, ok := s.categorizations[item.ItemID]; ok {
 				copied := categorization
 				itemCopy.Categorization = &copied
@@ -441,6 +412,19 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 	items := make([]CatalogItem, 0, len(payload.Items))
 	restoredCovers := make(map[string]string)
 	for _, item := range payload.Items {
+		// Older ASI ZIPs kept the AI description in TechnicalDescription and the
+		// supplier text in OriginalTechnicalDescription. Normalize them into the
+		// new dual-version shape on import.
+		if item.AITechnicalDescription != "" && item.TechnicalDescriptionFormat == "html" && strings.TrimSpace(item.OriginalTechnicalDescription) != "" {
+			item.TechnicalDescription = item.OriginalTechnicalDescription
+			item.TechnicalDescriptionFormat = "plain"
+			item.UseAIContent = true
+		} else if item.AITechnicalDescription == "" && item.TechnicalDescriptionFormat == "html" && strings.TrimSpace(item.OriginalTechnicalDescription) != "" {
+			item.AITechnicalDescription = sanitizeDescriptionHTML(item.TechnicalDescription)
+			item.TechnicalDescription = item.OriginalTechnicalDescription
+			item.TechnicalDescriptionFormat = "plain"
+			item.UseAIContent = true
+		}
 		if strings.TrimSpace(item.OriginalTechnicalDescription) == "" {
 			item.OriginalTechnicalDescription = item.TechnicalDescription
 		}
@@ -448,6 +432,12 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 			item.TechnicalDescriptionFormat = "plain"
 		} else {
 			item.TechnicalDescription = sanitizeDescriptionHTML(item.TechnicalDescription)
+		}
+		if item.AITechnicalDescription != "" {
+			item.AITechnicalDescription = sanitizeDescriptionHTML(item.AITechnicalDescription)
+			// Existing AI content is shown immediately after re-import, matching
+			// the behaviour of freshly completed work.
+			item.UseAIContent = true
 		}
 		processedCover := strings.TrimSpace(item.ProcessedCover)
 		// The cover is only a ZIP-sidecar. Keep it out of the live catalog
@@ -462,6 +452,7 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 			continue
 		}
 		if info, statErr := os.Stat(processedCover); statErr == nil && !info.IsDir() && info.Size() > 0 {
+			items[len(items)-1].UseAIContent = true
 			restoredCovers[item.ItemID] = processedCover
 		} else {
 			logEvent("image-processing", "saved ZIP cover unavailable", map[string]any{"tow_kod": item.TowKod, "path": processedCover})
@@ -485,7 +476,7 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 	// Restore its completed state before the upload handler queues AI work, so a
 	// saved catalog is displayed immediately instead of being generated again.
 	for _, item := range items {
-		if item.TechnicalDescriptionFormat == "html" && strings.TrimSpace(item.TechnicalDescription) != "" {
+		if strings.TrimSpace(item.AITechnicalDescription) != "" {
 			s.descriptionItems[item.ItemID] = DescriptionProcessingItem{Status: "done", Source: "saved"}
 		}
 	}
@@ -690,7 +681,7 @@ func (s *CatalogStore) WriteExportZIP(w io.Writer, itemKeys []string, towKods []
 			itemSlug = "artikal"
 		}
 
-		if generatedPath, progress := s.processedImages[item.ItemID], s.processingItems[item.ItemID]; s.aiEnabled && progress.Status == "done" && strings.TrimSpace(generatedPath) != "" {
+		if generatedPath, progress := s.processedImages[item.ItemID], s.processingItems[item.ItemID]; progress.Status == "done" && strings.TrimSpace(generatedPath) != "" {
 			coverEntryName := uniqueZIPEntryName(
 				fmt.Sprintf("processed/%s/cover.png", itemSlug),
 				usedEntryNames,
@@ -703,6 +694,13 @@ func (s *CatalogStore) WriteExportZIP(w io.Writer, itemKeys []string, towKods []
 			} else {
 				exportItem.ProcessedCover = filepath.ToSlash(coverEntryName)
 			}
+		}
+		// Keep both variants in the archive, while the primary description keeps
+		// compatibility with existing ASI ZIP readers.
+		if exportItem.UseAIContent && strings.TrimSpace(exportItem.AITechnicalDescription) != "" {
+			exportItem.OriginalTechnicalDescription = exportItem.TechnicalDescription
+			exportItem.TechnicalDescription = exportItem.AITechnicalDescription
+			exportItem.TechnicalDescriptionFormat = "html"
 		}
 
 		for imageIndex := range exportItem.Images {

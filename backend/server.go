@@ -128,6 +128,7 @@ func NewApp() (*App, error) {
 		imageProcessor:       NewImageProcessor(filepath.Join(exeDir, "background"), store.TempDir(), filepath.Join(exeDir, "models")),
 		descriptionProcessor: NewDescriptionProcessor(filepath.Join(exeDir, "models"), filepath.Join(storagePaths.RootDir, "ai-description-cache")),
 		aiQueue:              newAIJobQueue(),
+		aiProcessingEnabled:  true,
 	}
 	app.update = newUpdateManager(app)
 	app.desktop = newDesktopWindow()
@@ -167,58 +168,6 @@ func (a *App) imageProcessingIsEnabled() bool {
 	a.aiProcessingMu.RLock()
 	defer a.aiProcessingMu.RUnlock()
 	return a.aiProcessingEnabled
-}
-
-func (a *App) setImageProcessingEnabled(enabled bool, retry bool) {
-	a.aiProcessingMu.Lock()
-	// Retry must never cancel the item that is currently being generated. The
-	// old behaviour created a new generation and cleared the FIFO, so clicking
-	// retry for one malformed description silently discarded other products.
-	if retry && enabled && a.aiProcessingEnabled {
-		generation := a.aiGeneration
-		a.aiProcessingMu.Unlock()
-		a.descriptionProcessor.ResetFailure()
-		a.retryFailedAI(generation)
-		return
-	}
-	// The browser synchronizes this setting after every page refresh. Keeping
-	// the running generation intact is essential: cancelling it here left cards
-	// stuck at "AI obrađuje" while their jobs had already been discarded.
-	if a.aiProcessingEnabled == enabled && !retry {
-		generation := a.aiGeneration
-		a.aiProcessingMu.Unlock()
-		// A page refresh used to cancel the active generation. Queue one harmless
-		// backup for any item still marked as running: the queue de-duplicates
-		// waiting items, and a job that has genuinely finished becomes a no-op.
-		// This lets an orphaned "obrađuje" status recover without interrupting a
-		// currently running image or description job.
-		if enabled {
-			a.resumeIncompleteAIWork(generation)
-		}
-		return
-	}
-	a.aiGeneration++
-	if a.aiCancel != nil {
-		a.aiCancel()
-	}
-	a.aiProcessingEnabled = enabled
-	generation := a.aiGeneration
-	aiContext, cancel := context.WithCancel(context.Background())
-	a.aiContext = aiContext
-	a.aiCancel = cancel
-	a.aiProcessingMu.Unlock()
-	a.store.SetAIEnabled(enabled)
-	a.aiQueue.Clear()
-
-	if enabled {
-		a.descriptionProcessor.ResetFailure()
-		a.enqueueUnprocessedAI(generation)
-		return
-	}
-	a.store.ResetProcessedImages()
-	if err := a.store.RestoreOriginalDescriptions(); err != nil {
-		logEvent("ai-processing", "failed to restore original descriptions", map[string]any{"error": err.Error()})
-	}
 }
 
 func (a *App) decorateAIProcessingState(state *CatalogState) {
@@ -270,68 +219,43 @@ func (a *App) isCurrentAIJob(job aiCatalogJob) bool {
 	return a.aiProcessingEnabled && a.aiGeneration == job.Generation
 }
 
-func (a *App) enqueueUnprocessedImages() {
+func (a *App) enqueueAISelection(itemKeys, towKods []string, kind string) error {
+	targets := newCatalogSelectionTargets(itemKeys, towKods)
+	if targets.Empty() {
+		return fmt.Errorf("odaberi barem jedan artikal")
+	}
 	generation, enabled, _ := a.currentAIGeneration()
-	if enabled {
-		a.enqueueUnprocessedAI(generation)
+	if !enabled {
+		return fmt.Errorf("AI nije dostupan")
 	}
-}
-
-func (a *App) enqueueUnprocessedAI(generation uint64) {
+	count := 0
 	for _, item := range a.store.State().Items {
-		_, imageProgress := a.store.ProcessedImage(item.ItemID)
-		descriptionProgress := a.store.DescriptionProcessing(item.ItemID)
-		if imageProgress.Status == "done" && descriptionProgress.Status == "done" {
+		if !targets.Match(item) {
 			continue
 		}
-		if imageProgress.Status == "queued" || imageProgress.Status == "processing" || descriptionProgress.Status == "queued" || descriptionProgress.Status == "processing" {
-			continue
-		}
-		if imageProgress.Status != "done" {
+		if kind == "image" {
+			_, progress := a.store.ProcessedImage(item.ItemID)
+			if progress.Status == "done" || progress.Status == "queued" || progress.Status == "processing" {
+				continue
+			}
 			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "queued"})
-		}
-		if descriptionProgress.Status != "done" {
+		} else {
+			progress := a.store.DescriptionProcessing(item.ItemID)
+			if progress.Status == "done" || progress.Status == "queued" || progress.Status == "processing" {
+				continue
+			}
 			a.store.SetDescriptionProcessingStatus(item.ItemID, DescriptionProcessingItem{Status: "queued"})
 		}
-		a.aiQueue.Push(aiCatalogJob{ItemID: item.ItemID, Generation: generation})
+		// The switch represents the user's chosen output version, including while
+		// the requested AI result is still being prepared.
+		_ = a.store.SetAIContentEnabled(item.ItemID, true)
+		a.aiQueue.Push(aiCatalogJob{ItemID: item.ItemID, Generation: generation, Kind: kind})
+		count++
 	}
-}
-
-// retryFailedAI only puts failed items back into the queue. Existing queued
-// and processing work belongs to the current generation and must continue.
-func (a *App) retryFailedAI(generation uint64) {
-	for _, item := range a.store.State().Items {
-		_, imageProgress := a.store.ProcessedImage(item.ItemID)
-		descriptionProgress := a.store.DescriptionProcessing(item.ItemID)
-		shouldRetry := false
-		if imageProgress.Status == "error" {
-			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "queued"})
-			shouldRetry = true
-		}
-		if descriptionProgress.Status == "error" {
-			a.store.SetDescriptionProcessingStatus(item.ItemID, DescriptionProcessingItem{Status: "queued"})
-			shouldRetry = true
-		}
-		if shouldRetry {
-			a.aiQueue.Push(aiCatalogJob{ItemID: item.ItemID, Generation: generation})
-			logEvent("ai-processing", "failed item requeued", map[string]any{"item_id": item.ItemID})
-		}
+	if count == 0 {
+		return nil
 	}
-}
-
-func (a *App) resumeIncompleteAIWork(generation uint64) {
-	for _, item := range a.store.State().Items {
-		_, imageProgress := a.store.ProcessedImage(item.ItemID)
-		descriptionProgress := a.store.DescriptionProcessing(item.ItemID)
-		if imageProgress.Status == "done" && descriptionProgress.Status == "done" {
-			continue
-		}
-		if imageProgress.Status != "queued" && imageProgress.Status != "processing" &&
-			descriptionProgress.Status != "queued" && descriptionProgress.Status != "processing" {
-			continue
-		}
-		a.aiQueue.Push(aiCatalogJob{ItemID: item.ItemID, Generation: generation})
-	}
+	return nil
 }
 
 func (a *App) processAIQueue() {
@@ -347,34 +271,36 @@ func (a *App) processAIQueue() {
 		if err != nil {
 			continue
 		}
-		_, imageProgress := a.store.ProcessedImage(item.ItemID)
-		if imageProgress.Status != "done" {
-			a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "processing"})
-			if len(item.Images) == 0 {
-				a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: "artikal nema sliku"})
-			} else {
-				result, model, imageErr := a.imageProcessor.Compose(item.ItemID, item.Images[0], func(selectedModel string) {
-					a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "processing", Model: selectedModel})
-				})
-				if !a.isCurrentAIJob(job) {
-					if result != "" {
-						_ = os.Remove(result)
-					}
-					continue
-				}
-				if imageErr != nil {
-					a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: imageErr.Error()})
-					logEvent("ai-image", "image processing failed", map[string]any{
-						"item_id": item.ItemID,
-						"error":   imageErr.Error(),
-					})
+		if job.Kind == "image" {
+			_, imageProgress := a.store.ProcessedImage(item.ItemID)
+			if imageProgress.Status != "done" {
+				a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "processing"})
+				if len(item.Images) == 0 {
+					a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: "artikal nema sliku"})
 				} else {
-					a.store.SetProcessedImageWithModel(item.ItemID, result, model)
+					result, model, imageErr := a.imageProcessor.Compose(item.ItemID, item.Images[0], func(selectedModel string) {
+						a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "processing", Model: selectedModel})
+					})
+					if !a.isCurrentAIJob(job) {
+						if result != "" {
+							_ = os.Remove(result)
+						}
+						continue
+					}
+					if imageErr != nil {
+						a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: imageErr.Error()})
+						logEvent("ai-image", "image processing failed", map[string]any{
+							"item_id": item.ItemID,
+							"error":   imageErr.Error(),
+						})
+					} else {
+						a.store.SetProcessedImageWithModel(item.ItemID, result, model)
+					}
 				}
 			}
-		}
 
-		if !a.isCurrentAIJob(job) {
+		}
+		if job.Kind != "description" || !a.isCurrentAIJob(job) {
 			continue
 		}
 		if a.store.DescriptionProcessing(item.ItemID).Status != "done" {
@@ -510,8 +436,8 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 		a.handleCatalogUpload(w, r)
 	})
 	protectedAPI.HandleFunc("/api/catalog/processed-image", a.handleProcessedCatalogImage)
-	protectedAPI.HandleFunc("/api/image-processing/settings", a.handleImageProcessingSettings)
-	protectedAPI.HandleFunc("/api/ai-processing/settings", a.handleImageProcessingSettings)
+	protectedAPI.HandleFunc("/api/ai-processing/run", a.handleAIProcess)
+	protectedAPI.HandleFunc("/api/ai-processing/content", a.handleAIContentToggle)
 
 	protectedAPI.HandleFunc("/api/catalog/bulk-delete", a.handleCatalogBulkDelete)
 	protectedAPI.HandleFunc("/api/catalog/bulk-edit", a.handleCatalogBulkEdit)

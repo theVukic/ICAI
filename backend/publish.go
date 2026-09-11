@@ -197,6 +197,13 @@ func (a *App) publishCatalogItems(ctx context.Context, items []CatalogItem) (Cat
 		}
 		currentItem.SelectionKey = reservedItem.SelectionKey
 		currentItem.Categorization = reservedItem.Categorization
+		// Refreshing the item above restores its stored supplier description.
+		// Re-apply the user's active AI variant here so template rendering and the
+		// final OLX request use exactly the version selected on the card.
+		if currentItem.UseAIContent && strings.TrimSpace(currentItem.AITechnicalDescription) != "" {
+			currentItem.TechnicalDescription = currentItem.AITechnicalDescription
+			currentItem.TechnicalDescriptionFormat = "html"
+		}
 		items[index] = currentItem
 	}
 	useSelection := true
@@ -246,7 +253,7 @@ func (a *App) publishCatalogItems(ctx context.Context, items []CatalogItem) (Cat
 			})
 			continue
 		}
-		if a.imageProcessingIsEnabled() {
+		if item.UseAIContent {
 			generatedPath, progress := a.store.ProcessedImage(item.ItemID)
 			if progress.Status == "done" && strings.TrimSpace(generatedPath) != "" {
 				// Position -1 guarantees the generated cover is uploaded first while

@@ -42,6 +42,8 @@ type CatalogItem = {
   processedImageUrl?: string;
   technicalDescription: string;
   originalTechnicalDescription?: string;
+	aiTechnicalDescription?: string;
+	useAIContent?: boolean;
   technicalDescriptionFormat?: "plain" | "html";
   status: CatalogStatus;
   retailPrice: number;
@@ -250,8 +252,6 @@ const state: {
   listingLimitRemaining: number | null;
   listingLimitUnlimited: boolean;
   listingLimitLoading: boolean;
-  imageProcessingEnabled: boolean;
-  imageProcessingSynced: boolean;
   shouldRestoreMainScroll: boolean;
   refreshSuspendUntil: number;
 } = {
@@ -301,8 +301,6 @@ const state: {
   listingLimitRemaining: null,
   listingLimitUnlimited: false,
   listingLimitLoading: false,
-  imageProcessingEnabled: loadStoredImageProcessingEnabled(),
-  imageProcessingSynced: false,
   shouldRestoreMainScroll: false,
   refreshSuspendUntil: 0,
 };
@@ -411,6 +409,8 @@ const categorizeIcon = `
     <path d="M18 22c2.209 0 4-1.791 4-4s-1.791-4-4-4-4 1.791-4 4 1.791 4 4 4z" opacity="0.34" />
   </svg>
 `;
+const aiImageIcon = `<svg fill="#F3F6FB" viewBox="144 144 512 512" aria-hidden="true"><path d="M226.77 179.58c-25.895 0-47.172 21.398-47.172 47.293v346.34c0 25.895 21.277 47.203 47.172 47.203h346.34c25.895 0 47.293-21.309 47.293-47.203l-.003906-346.34c0-25.895-21.398-47.293-47.293-47.293zm0 31.488h346.34c8.9961 0 15.805 6.8125 15.805 15.805l-.003906 218.3-68.695-57.195c-8-5.793-13.934-5.4961-20.57.33594l-53.074 47.172-107.07-94.465c-6.8086-6.0781-14.117-5.4609-20.449-.37109l-107.96 88.93v-202.7c0-8.9961 6.6875-15.805 15.684-15.805zm275.55 31.488c-30.246 0-55.074 24.859-55.074 55.105s24.828 55.074 55.074 55.074 55.105-24.828 55.105-55.074c0-30.246-24.859-55.105-55.105-55.105zm0 31.52c13.23 0 23.617 10.355 23.617 23.586 0 13.23-10.387 23.586-23.617 23.586-13.23 0-23.707-10.355-23.707-23.586 0-13.23 10.48-23.586 23.707-23.586zM328.8 373.428l244.12 215.46H226.77c-8.9961 0-15.684-6.6875-15.684-15.684v-102.89zm181.67 47.418 78.445 65.344v74.906l-118.54-104.61z"/></svg>`;
+const aiDescriptionIcon = `<svg fill="#F3F6FB" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 7H3V4A1 1 0 0 1 4 3H20a1 1 0 0 1 1 1zM3 20V9H21V20a1 1 0 0 1-1 1H4A1 1 0 0 1 3 20zm3-6H18V12H6zm0 4h6V16H6z"/></svg>`;
 
 const editSelectedIcon = `
   <svg xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" width="24" height="24">
@@ -592,7 +592,7 @@ function render(): void {
         ? state.selectionPulseTowKods.includes(selectionKey)
         : false;
       const processing = state.data.aiProcessing.items[item.itemId];
-      const displayImages = displayImagesForItem(item, processing);
+		const displayImages = displayImagesForItem(item, processing);
       const currentImageIndex = Math.min(
         state.imageIndexes[imageKey] ?? 0,
         Math.max(displayImages.length - 1, 0),
@@ -658,6 +658,11 @@ function render(): void {
                 </button>
               </div>
             </div>
+			<div class="card-ai-actions">
+				<button class="icon-button ai-card-button ${processing?.image.status === "done" ? "ai-card-done" : ""}" type="button" aria-label="Obradi sliku" title="Obradi sliku" data-ai-process="image" data-ai-item-id="${escapeHtml(item.itemId)}" ${processing?.image.status === "queued" || processing?.image.status === "processing" || processing?.image.status === "done" ? "disabled" : ""}>${processing?.image.status === "done" ? "✓" : aiImageIcon}</button>
+				<button class="icon-button ai-card-button ${processing?.description.status === "done" ? "ai-card-done" : ""}" type="button" aria-label="Obradi opis" title="Obradi opis" data-ai-process="description" data-ai-item-id="${escapeHtml(item.itemId)}" ${processing?.description.status === "queued" || processing?.description.status === "processing" || processing?.description.status === "done" ? "disabled" : ""}>${processing?.description.status === "done" ? "✓" : aiDescriptionIcon}</button>
+				<label class="ai-content-switch" title="Prikaži/koristi AI verziju"><input type="checkbox" data-ai-toggle="${escapeHtml(item.itemId)}" ${item.useAIContent ? "checked" : ""} ${!hasAIContent(item, processing) ? "disabled" : ""}/><span></span></label>
+			</div>
           </div>
         </article>
       `;
@@ -679,6 +684,14 @@ function render(): void {
             ? `
               <div class="selection-tools ${state.selectionToolsAnimation}">
                 <div class="toolbar-action">
+				  <button class="header-icon-button selected-action-button ai-selected-image-button" id="processSelectedImageButton" type="button" aria-label="Obradi slike selektovanih artikala"><span class="button-icon">${aiImageIcon}</span></button>
+				  <span class="action-label action-label-toggle">AI SLIKA</span>
+				</div>
+				<div class="toolbar-action">
+				  <button class="header-icon-button selected-action-button ai-selected-description-button" id="processSelectedDescriptionButton" type="button" aria-label="Obradi opise selektovanih artikala"><span class="button-icon">${aiDescriptionIcon}</span></button>
+				  <span class="action-label action-label-toggle">AI OPIS</span>
+				</div>
+				<div class="toolbar-action">
                   <button class="header-icon-button selected-action-button category-selected-button" id="categorySelectedButton" type="button" aria-label="Kategorija za selektovane artikle">
                     <span class="button-icon">${categorySelectedIcon}</span>
                   </button>
@@ -856,20 +869,13 @@ function render(): void {
             <span class="action-label">SACUVAJ</span>
           </div>
           <div class="footer-image-processing-control">
-            <div class="toolbar-action footer-image-processing-action">
-              <button class="image-processing-toggle ${state.imageProcessingEnabled ? "is-active" : "is-inactive"}" id="imageProcessingButton" type="button" aria-label="${state.imageProcessingEnabled ? "Isključi uređivanje slika" : "Uključi uređivanje slika"}" aria-pressed="${state.imageProcessingEnabled}">
-                <span class="button-icon">✦</span>
-              </button>
-              <span class="action-label">AI</span>
-            </div>
             <div class="footer-image-processing-meta" aria-live="polite">
               <span class="ai-runtime-indicator ${state.data.aiProcessing.aiReady ? "ready" : "unavailable"}" title="${escapeHtml(state.data.aiProcessing.aiError || "Lokalni AI za slike i opise je spreman")}" aria-label="${state.data.aiProcessing.aiReady ? "AI spreman" : "AI nije spreman"}"><span class="ai-runtime-status" aria-hidden="true">${state.data.aiProcessing.aiReady ? "✓" : "×"}</span><span>AI</span></span>
               ${
                 state.data.totalItems > 0
-                  ? `<span class="image-processing-progress"><strong class="${state.data.aiProcessing.done > 0 ? "is-complete" : ""}">${state.data.aiProcessing.done}</strong><span>/</span><span>${state.data.totalItems}</span></span>`
+                  ? renderAIProgressCounters()
                   : ""
               }
-              ${state.data.aiProcessing.failed > 0 ? `<button class="ai-retry-button" id="retryAIButton" type="button" title="Ponovi neuspjele AI opise" aria-label="Ponovi neuspjele AI opise">↻</button>` : ""}
             </div>
           </div>
         </div>
@@ -937,6 +943,8 @@ function bindEvents(): void {
     document.querySelector<HTMLButtonElement>("#editSelectedButton");
   const deleteSelectedButton =
     document.querySelector<HTMLButtonElement>("#deleteSelectedButton");
+	const processSelectedImageButton = document.querySelector<HTMLButtonElement>("#processSelectedImageButton");
+	const processSelectedDescriptionButton = document.querySelector<HTMLButtonElement>("#processSelectedDescriptionButton");
   const selectableCards =
     document.querySelectorAll<HTMLElement>("[data-select-card]");
   const sortMenu = document.querySelector<HTMLElement>("#sortMenu");
@@ -953,8 +961,8 @@ function bindEvents(): void {
     document.querySelector<HTMLButtonElement>("#publishButton");
   const logoutButton =
     document.querySelector<HTMLButtonElement>("#logoutButton");
-  const imageProcessingButton = document.querySelector<HTMLButtonElement>("#imageProcessingButton");
-  const retryAIButton = document.querySelector<HTMLButtonElement>("#retryAIButton");
+	const aiProcessButtons = document.querySelectorAll<HTMLButtonElement>("[data-ai-process]");
+	const aiToggleInputs = document.querySelectorAll<HTMLInputElement>("[data-ai-toggle]");
   const olxTokenTrigger =
     document.querySelector<HTMLButtonElement>("#olxTokenTrigger");
   const olxTokenMenu =
@@ -976,16 +984,15 @@ function bindEvents(): void {
     await forceLogoutToLogin();
   });
 
-  imageProcessingButton?.addEventListener("click", async () => {
-    const enabled = !state.imageProcessingEnabled;
-    imageProcessingButton.disabled = true;
-    await setAIProcessing(enabled, false);
-  });
-
-  retryAIButton?.addEventListener("click", async () => {
-    retryAIButton.disabled = true;
-    await setAIProcessing(true, true);
-  });
+	processSelectedImageButton?.addEventListener("click", () => void requestAIProcess(state.selectedTowKods, "image"));
+	processSelectedDescriptionButton?.addEventListener("click", () => void requestAIProcess(state.selectedTowKods, "description"));
+	for (const button of aiProcessButtons) button.addEventListener("click", () => {
+		const itemID = button.dataset.aiItemId; const kind = button.dataset.aiProcess as "image" | "description";
+		if (itemID && (kind === "image" || kind === "description")) void requestAIProcess([itemID], kind);
+	});
+	for (const input of aiToggleInputs) input.addEventListener("change", () => {
+		const itemID = input.dataset.aiToggle; if (itemID) void setAIContentToggle(itemID, input.checked);
+	});
 
 
   olxTokenTrigger?.addEventListener("click", (event) => {
@@ -1563,17 +1570,6 @@ async function loadStateOnce(backgroundRefresh = false): Promise<void> {
       return;
     }
 
-    if (!state.imageProcessingSynced) {
-      const settingsResponse = await fetch("/api/ai-processing/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: state.imageProcessingEnabled }),
-      });
-      if (settingsResponse.ok) {
-        state.imageProcessingSynced = true;
-      }
-    }
-
     const previousLimitState = `${state.listingLimitRemaining}|${state.listingLimitUnlimited}`;
     const previousCatalogState = JSON.stringify(state.data);
     state.listingLimitLoading = state.tokenConfigured;
@@ -1594,7 +1590,6 @@ async function loadStateOnce(backgroundRefresh = false): Promise<void> {
     }
 
     const nextData = data as CatalogState;
-	state.imageProcessingEnabled = nextData.aiProcessing.enabled;
     applyListingLimits(await limitsPromise);
     const catalogChanged = previousCatalogState !== JSON.stringify(nextData);
     const limitsChanged = previousLimitState !== `${state.listingLimitRemaining}|${state.listingLimitUnlimited}`;
@@ -2032,36 +2027,56 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-async function setAIProcessing(enabled: boolean, retry: boolean): Promise<void> {
-  try {
-    const response = await fetch("/api/ai-processing/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled, retry }),
-    });
-    const data = await response.json() as AIProcessingState | ErrorResponse;
-    if (!response.ok) throw new Error("error" in data ? data.error : "Promjena AI obrade nije uspjela.");
-    state.imageProcessingEnabled = enabled;
-    state.data.aiProcessing = data as AIProcessingState;
-    saveStoredImageProcessingEnabled(enabled);
-    state.message = retry
-      ? "Neuspjeli AI opisi su ponovo dodani u red."
-      : enabled
-        ? "AI obrada slika i opisa je uključena."
-        : "AI je isključen; vraćene su originalne slike i deskripcije.";
-    state.messageTone = "success";
-  } catch (error) {
-    state.message = error instanceof Error ? error.message : "Promjena AI obrade nije uspjela.";
-    state.messageTone = "danger";
-  }
-  render();
-}
-
 function displayImagesForItem(item: CatalogItem, processing?: AIProcessingItem): CatalogImage[] {
-  if (processing?.image.status === "done" && item.processedImageUrl) {
+	if (item.useAIContent && processing?.image.status === "done" && item.processedImageUrl) {
     return [{ position: -1, url: item.processedImageUrl }, ...item.images];
   }
   return item.images;
+}
+
+function hasAIContent(item: CatalogItem, processing?: AIProcessingItem): boolean {
+	return Boolean(item.aiTechnicalDescription?.trim()) || Boolean(processing?.image.status === "done" && item.processedImageUrl);
+}
+
+function renderAIProgressCounters(): string {
+	const values = state.data.items.reduce((counts, item) => {
+		const work = state.data.aiProcessing.items[item.itemId];
+		for (const [kind, progress] of [["image", work?.image], ["description", work?.description]] as const) {
+			if (!progress?.status) continue;
+			counts[kind].requested++;
+			if (progress.status === "done") counts[kind].done++;
+			if (progress.status === "queued" || progress.status === "processing") counts[kind].active++;
+			if (progress.status === "error") counts[kind].failed++;
+		}
+		return counts;
+	}, { image: { requested: 0, done: 0, active: 0, failed: 0 }, description: { requested: 0, done: 0, active: 0, failed: 0 } });
+	const counter = (label: string, value: { requested: number; done: number; active: number; failed: number }) => value.requested
+		? `<span class="image-processing-progress"><b>${label}</b><strong class="${value.done > 0 ? "is-complete" : ""}">${value.done}</strong>/<span>${value.requested}</span>${value.active ? `<em>${value.active} u redu</em>` : ""}${value.failed ? `<em class="ai-count-error">${value.failed} greška</em>` : ""}</span>` : "";
+	return counter("Slike", values.image) + counter("Opisi", values.description);
+}
+
+async function requestAIProcess(itemKeys: string[], kind: "image" | "description"): Promise<void> {
+	if (itemKeys.length === 0) return;
+	try {
+		const response = await fetch("/api/ai-processing/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ itemKeys, kind }) });
+		const data = await response.json() as AIProcessingState | ErrorResponse;
+		if (!response.ok) throw new Error("error" in data ? data.error : "AI obrada nije pokrenuta.");
+		state.data.aiProcessing = data as AIProcessingState;
+		for (const item of state.data.items) if (itemKeys.includes(item.itemId)) item.useAIContent = true;
+		state.message = kind === "image" ? "AI obrada slika je dodana u red." : "AI obrada opisa je dodana u red.";
+		state.messageTone = "success";
+	} catch (error) { state.message = error instanceof Error ? error.message : "AI obrada nije pokrenuta."; state.messageTone = "danger"; }
+	render();
+}
+
+async function setAIContentToggle(itemID: string, enabled: boolean): Promise<void> {
+	try {
+		const response = await fetch(`/api/ai-processing/content?itemId=${encodeURIComponent(itemID)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) });
+		const data = await response.json() as CatalogState | ErrorResponse;
+		if (!response.ok) throw new Error("error" in data ? data.error : "Promjena AI verzije nije uspjela.");
+		state.data = data as CatalogState;
+	} catch (error) { state.message = error instanceof Error ? error.message : "Promjena AI verzije nije uspjela."; state.messageTone = "danger"; }
+	render();
 }
 
 function updateProductCardImage(
@@ -2091,29 +2106,35 @@ function updateProductCardImage(
 function renderAIProcessingStatuses(item: AIProcessingItem): string {
   const statuses: Array<{ label: string; tone: string }> = [];
   if (item.image.status === "processing") statuses.push({ label: "AI obrađuje sliku", tone: "processing" });
+  else if (item.image.status === "queued") statuses.push({ label: "Slika čeka obradu", tone: "queued" });
   else if (item.image.status === "done") statuses.push({ label: "Slika gotova", tone: "done" });
   else if (item.image.status === "error") statuses.push({ label: item.image.error ? `Slika: ${item.image.error}` : "Slika nije obrađena", tone: "error" });
-  else statuses.push({ label: "Čeka AI obradu slike", tone: "queued" });
 
   if (item.description.status === "processing") statuses.push({ label: "AI obrađuje opis", tone: "processing" });
+  else if (item.description.status === "queued") statuses.push({ label: "Opis čeka obradu", tone: "queued" });
   else if (item.description.status === "done") statuses.push({ label: "Opis gotov", tone: "done" });
   else if (item.description.status === "error") statuses.push({ label: item.description.error ? `Opis: ${item.description.error}` : "Opis nije obrađen", tone: "error" });
 
-  return `<div class="ai-processing-statuses">${statuses.map(({ label, tone }) => `<div class="image-processing-status ${escapeHtml(tone)}">${escapeHtml(label)}</div>`).join("")}</div>`;
+	return statuses.length ? `<div class="ai-processing-statuses">${statuses.map(({ label, tone }) => `<div class="image-processing-status ${escapeHtml(tone)}">${escapeHtml(label)}</div>`).join("")}</div>` : "";
 }
 
 function hasBlockingAIForCurrentSelection(): boolean {
-  if (!state.imageProcessingEnabled || state.data.items.length === 0) return false;
+  if (state.data.items.length === 0) return false;
   const selected = new Set(state.selectedTowKods);
   const targets = selected.size > 0
     ? state.data.items.filter((item) => selected.has(getItemSelectionKey(item)))
     : state.data.items;
-  return targets.some((item) => state.data.aiProcessing.items[item.itemId]?.description.status !== "done");
+	return targets.some((item) => {
+		const work = state.data.aiProcessing.items[item.itemId];
+		return work?.image.status === "queued" || work?.image.status === "processing" ||
+			work?.description.status === "queued" || work?.description.status === "processing";
+	});
 }
 
 function renderTechnicalDescription(item: CatalogItem): string {
-  const value = item.technicalDescription || "Nema opisa.";
-  if (item.technicalDescriptionFormat !== "html") {
+	const ai = item.useAIContent && item.aiTechnicalDescription?.trim();
+	const value = ai || item.technicalDescription || "Nema opisa.";
+	if (!ai && item.technicalDescriptionFormat !== "html") {
     return `<p>${escapeHtml(value).replaceAll("\n", "<br>")}</p>`;
   }
   return sanitizeTechnicalDescriptionHTML(value);
@@ -2152,18 +2173,6 @@ function formatCurrencyCode(value: string): string {
 function loadStoredViewMode(): "grid" | "list" {
   const storedValue = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY);
   return storedValue === "list" ? "list" : "grid";
-}
-
-function loadStoredImageProcessingEnabled(): boolean {
-  // Image editing is available by default on every fresh application start.
-  // The toggle is intentionally session-only: users can turn it off for the
-  // current run, but that choice must not disable it after restarting ASI.
-  return true;
-}
-
-function saveStoredImageProcessingEnabled(_value: boolean): void {
-  // Kept as a call site for the current-session toggle; no preference is
-  // persisted between application launches.
 }
 
 function saveViewMode(value: "grid" | "list"): void {
@@ -2696,10 +2705,10 @@ window.addEventListener(
   { passive: true },
 );
 
-// Image generation runs server-side, so poll lightly only while the optional
-// feature is enabled. This keeps card statuses and the progress counter live.
+// Image generation runs server-side; polling keeps manual AI job statuses and
+// progress counters live while the catalog page is open.
 window.setInterval(() => {
-  if (state.isAuthenticated && state.imageProcessingEnabled && isMainPath()) {
+  if (state.isAuthenticated && isMainPath()) {
     refreshMainPageFromStore(true);
   }
 }, 1500);

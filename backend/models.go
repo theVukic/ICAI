@@ -37,14 +37,18 @@ type CatalogItem struct {
 	TechnicalDescription string `json:"technicalDescription"`
 	// OriginalTechnicalDescription keeps the supplier text reversible when the
 	// local AI writes rich HTML into TechnicalDescription.
-	OriginalTechnicalDescription string                 `json:"originalTechnicalDescription,omitempty"`
-	TechnicalDescriptionFormat   string                 `json:"technicalDescriptionFormat,omitempty"`
-	Status                       CatalogStatus          `json:"status"`
-	RetailPrice                  float64                `json:"retailPrice"`
-	CurrencyCode                 string                 `json:"currencyCode"`
-	SourceCatalogID              string                 `json:"sourceCatalogId,omitempty"`
-	SourceFileName               string                 `json:"sourceFileName,omitempty"`
-	Categorization               *ItemCategorySelection `json:"categorization,omitempty"`
+	OriginalTechnicalDescription string `json:"originalTechnicalDescription,omitempty"`
+	// AITechnicalDescription is kept separately so the user can instantly switch
+	// between the supplier and generated version without losing either one.
+	AITechnicalDescription     string                 `json:"aiTechnicalDescription,omitempty"`
+	UseAIContent               bool                   `json:"useAIContent,omitempty"`
+	TechnicalDescriptionFormat string                 `json:"technicalDescriptionFormat,omitempty"`
+	Status                     CatalogStatus          `json:"status"`
+	RetailPrice                float64                `json:"retailPrice"`
+	CurrencyCode               string                 `json:"currencyCode"`
+	SourceCatalogID            string                 `json:"sourceCatalogId,omitempty"`
+	SourceFileName             string                 `json:"sourceFileName,omitempty"`
+	Categorization             *ItemCategorySelection `json:"categorization,omitempty"`
 }
 
 type CatalogImage struct {
@@ -111,11 +115,14 @@ type AIProcessingState struct {
 	Failed  int                         `json:"failed"`
 }
 
-type ImageProcessingSettingsRequest struct {
+type AIProcessRequest struct {
+	ItemKeys []string `json:"itemKeys,omitempty"`
+	TowKods  []string `json:"towKods,omitempty"`
+	Kind     string   `json:"kind"` // image or description
+}
+
+type AIContentToggleRequest struct {
 	Enabled bool `json:"enabled"`
-	// Retry explicitly restarts failed/pending work. A regular refresh sends the
-	// current value without this flag and must not interrupt active AI work.
-	Retry bool `json:"retry,omitempty"`
 }
 
 type ErrorResponse struct {

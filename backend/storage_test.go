@@ -49,7 +49,6 @@ func TestExportZIPKeepsProcessedCoverOnlyInsideZIP(t *testing.T) {
 			ItemID: "item-1", TowKod: "ABC-1", Images: []CatalogImage{{Path: original}},
 			TechnicalDescription: "<p>AI opis</p>", OriginalTechnicalDescription: "Početni opis", TechnicalDescriptionFormat: "html",
 		}}}},
-		aiEnabled:        true,
 		pendingPublishes: map[string]CatalogItem{},
 		categorizations:  map[string]ItemCategorySelection{},
 		processedImages:  map[string]string{"item-1": processed},
@@ -133,39 +132,9 @@ func TestExportZIPKeepsProcessedCoverOnlyInsideZIP(t *testing.T) {
 	}
 }
 
-func TestRestoreOriginalDescriptionPersistsCatalog(t *testing.T) {
-	dir := t.TempDir()
-	catalogPath := filepath.Join(dir, "catalog.json")
-	payload := CatalogPayload{Items: []CatalogItem{{
-		ItemID: "item-1", TechnicalDescription: "<h3>AI opis</h3>",
-		OriginalTechnicalDescription: "Početni opis", TechnicalDescriptionFormat: "html",
-	}}}
-	encoded, err := json.Marshal(payload)
-	if err != nil || os.WriteFile(catalogPath, encoded, 0o644) != nil {
-		t.Fatal("failed to prepare catalog")
-	}
-	store := &CatalogStore{
-		catalogs:         []UploadedCatalog{{SavedPath: catalogPath, Items: payload.Items}},
-		descriptionItems: map[string]DescriptionProcessingItem{"item-1": {Status: "done"}},
-	}
-	if err := store.RestoreOriginalDescriptions(); err != nil {
-		t.Fatal(err)
-	}
-	item := store.catalogs[0].Items[0]
-	if item.TechnicalDescription != "Početni opis" || item.TechnicalDescriptionFormat != "plain" {
-		t.Fatalf("original description was not restored: %#v", item)
-	}
-	var saved CatalogPayload
-	input, _ := os.ReadFile(catalogPath)
-	if json.Unmarshal(input, &saved) != nil || saved.Items[0].TechnicalDescription != "Početni opis" {
-		t.Fatalf("restored description was not persisted: %s", input)
-	}
-}
-
 func TestAIWorkBlockingUsesOnlyRequestedItems(t *testing.T) {
 	store := &CatalogStore{
-		aiEnabled: true,
-		catalogs:  []UploadedCatalog{{Items: []CatalogItem{{ItemID: "ready", TechnicalDescriptionFormat: "html"}, {ItemID: "pending"}, {ItemID: "failed"}}}},
+		catalogs: []UploadedCatalog{{Items: []CatalogItem{{ItemID: "ready", TechnicalDescriptionFormat: "html"}, {ItemID: "pending"}, {ItemID: "failed"}}}},
 		descriptionItems: map[string]DescriptionProcessingItem{
 			"ready": {Status: "done"}, "pending": {Status: "processing"}, "failed": {Status: "error"},
 		},
@@ -173,19 +142,18 @@ func TestAIWorkBlockingUsesOnlyRequestedItems(t *testing.T) {
 	if pending, failed := store.AIWorkBlocking([]string{"ready"}, nil); pending != 0 || failed != 0 {
 		t.Fatalf("ready selection should not block, pending=%d failed=%d", pending, failed)
 	}
-	if pending, failed := store.AIWorkBlocking(nil, nil); pending != 1 || failed != 1 {
-		t.Fatalf("all items should report one pending and one failure, pending=%d failed=%d", pending, failed)
+	if pending, failed := store.AIWorkBlocking(nil, nil); pending != 1 || failed != 0 {
+		t.Fatalf("only active AI work should block, pending=%d failed=%d", pending, failed)
 	}
 }
 
-func TestAIWorkBlockingDoesNotTrustDoneStatusWithPlainDescription(t *testing.T) {
+func TestAIWorkBlockingDoesNotBlockAnUnrequestedDescription(t *testing.T) {
 	store := &CatalogStore{
-		aiEnabled:        true,
 		catalogs:         []UploadedCatalog{{Items: []CatalogItem{{ItemID: "item", TechnicalDescription: "Početni opis", TechnicalDescriptionFormat: "plain"}}}},
 		descriptionItems: map[string]DescriptionProcessingItem{"item": {Status: "done"}},
 	}
-	if pending, failed := store.AIWorkBlocking(nil, nil); pending != 1 || failed != 0 {
-		t.Fatalf("plain supplier description must remain blocked, pending=%d failed=%d", pending, failed)
+	if pending, failed := store.AIWorkBlocking(nil, nil); pending != 0 || failed != 0 {
+		t.Fatalf("an unrequested AI description must not block, pending=%d failed=%d", pending, failed)
 	}
 }
 
@@ -198,7 +166,6 @@ func TestChangingNameOrPriceDoesNotCompleteAnUnchangedAIDescription(t *testing.T
 		t.Fatal("failed to prepare catalog")
 	}
 	store := &CatalogStore{
-		aiEnabled:        true,
 		catalogs:         []UploadedCatalog{{SavedPath: catalogPath, Items: []CatalogItem{item}}},
 		descriptionItems: map[string]DescriptionProcessingItem{"item-1": {Status: "processing"}},
 	}

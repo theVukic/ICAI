@@ -42,6 +42,8 @@ type CatalogItem = {
   images: CatalogImage[];
 	processedImageUrl?: string;
   technicalDescription: string;
+	aiTechnicalDescription?: string;
+	useAIContent?: boolean;
   technicalDescriptionFormat?: "plain" | "html";
   status: CatalogStatus;
   retailPrice: number;
@@ -225,10 +227,10 @@ function renderEditPage(root: HTMLDivElement, towKod: string): void {
                         </label>
 
                         <label class="edit-field edit-field-fill">
-                          <span class="edit-label-tight">Deskripcija</span>
-                          ${item.technicalDescriptionFormat === "html"
+						  <span class="edit-label-tight">${isEditingAIDescription(item) ? "AI deskripcija" : "Deskripcija"}</span>
+						  ${descriptionFormatForEdit(item) === "html"
                             ? `<div id="editDescriptionEditor" class="description-editor"></div>`
-                            : `<textarea id="editDescription" name="description" rows="10">${escapeHtml(item.technicalDescription || "")}</textarea>`}
+							: `<textarea id="editDescription" name="description" rows="10">${escapeHtml(descriptionForEdit(item))}</textarea>`}
                         </label>
 
                         <div class="edit-card-footer">
@@ -336,7 +338,7 @@ function bindEditEvents(root: HTMLDivElement, towKod: string): void {
 
 function mountEditDescriptionEditor(): void {
   const container = document.querySelector<HTMLDivElement>("#editDescriptionEditor");
-  if (!container || !state.item || state.item.technicalDescriptionFormat !== "html") {
+	if (!container || !state.item || descriptionFormatForEdit(state.item) !== "html") {
     state.quill = null;
     return;
   }
@@ -352,8 +354,20 @@ function mountEditDescriptionEditor(): void {
     },
     placeholder: "Unesi deskripciju...",
   });
-  quill.clipboard.dangerouslyPasteHTML(state.item.technicalDescription || "");
+	quill.clipboard.dangerouslyPasteHTML(descriptionForEdit(state.item));
   state.quill = quill;
+}
+
+function isEditingAIDescription(item: CatalogItem): boolean {
+	return Boolean(item.useAIContent && item.aiTechnicalDescription?.trim());
+}
+
+function descriptionForEdit(item: CatalogItem): string {
+	return isEditingAIDescription(item) ? item.aiTechnicalDescription || "" : item.technicalDescription || "";
+}
+
+function descriptionFormatForEdit(item: CatalogItem): "plain" | "html" {
+	return isEditingAIDescription(item) ? "html" : item.technicalDescriptionFormat === "html" ? "html" : "plain";
 }
 
 function normalizeEditorHtml(value: string): string {

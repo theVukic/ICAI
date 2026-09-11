@@ -97,9 +97,6 @@ func (a *App) handleCatalogUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state := a.store.State()
-	if a.imageProcessingIsEnabled() {
-		a.enqueueUnprocessedImages()
-	}
 	if len(skippedDuplicates) > 0 {
 		logEvent("catalog", "duplicate upload skipped", map[string]any{
 			"duplicate_count": len(skippedDuplicates),
@@ -116,25 +113,47 @@ func (a *App) handleCatalogUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, state)
 }
 
-func (a *App) handleImageProcessingSettings(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		state := a.store.State()
-		a.decorateAIProcessingState(&state)
-		writeJSON(w, http.StatusOK, state.AIProcessing)
-	case http.MethodPut:
-		var request ImageProcessingSettingsRequest
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&request); err != nil {
-			writeError(w, http.StatusBadRequest, "neispravna postavka obrade slika")
-			return
-		}
-		a.setImageProcessingEnabled(request.Enabled, request.Retry)
-		state := a.store.State()
-		a.decorateAIProcessingState(&state)
-		writeJSON(w, http.StatusOK, state.AIProcessing)
-	default:
+func (a *App) handleAIProcess(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
+	var req AIProcessRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "neispravan AI zahtjev")
+		return
+	}
+	if req.Kind != "image" && req.Kind != "description" {
+		writeError(w, http.StatusBadRequest, "nepoznata AI obrada")
+		return
+	}
+	if err := a.enqueueAISelection(req.ItemKeys, req.TowKods, req.Kind); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	state := a.store.State()
+	a.decorateAIProcessingState(&state)
+	writeJSON(w, http.StatusAccepted, state.AIProcessing)
+}
+
+func (a *App) handleAIContentToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	itemID := r.URL.Query().Get("itemId")
+	var req AIContentToggleRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "neispravan toggle")
+		return
+	}
+	if err := a.store.SetAIContentEnabled(itemID, req.Enabled); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	state := a.store.State()
+	a.decorateAIProcessingState(&state)
+	writeJSON(w, http.StatusOK, state)
 }
 
 func (a *App) handleCatalogClear(w http.ResponseWriter, r *http.Request) {

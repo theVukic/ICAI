@@ -5,6 +5,7 @@ import "sync"
 type aiCatalogJob struct {
 	ItemID     string
 	Generation uint64
+	Kind       string
 }
 
 // aiJobQueue is an in-memory unbounded FIFO. Catalogs with thousands of rows
@@ -29,11 +30,12 @@ func (q *aiJobQueue) Push(job aiCatalogJob) {
 	if q.closed || job.ItemID == "" {
 		return
 	}
-	if generation, exists := q.queued[job.ItemID]; exists && generation == job.Generation {
+	key := job.ItemID + ":" + job.Kind
+	if generation, exists := q.queued[key]; exists && generation == job.Generation {
 		return
 	}
 	q.jobs = append(q.jobs, job)
-	q.queued[job.ItemID] = job.Generation
+	q.queued[key] = job.Generation
 	q.cond.Signal()
 }
 
@@ -49,7 +51,7 @@ func (q *aiJobQueue) Pop() (aiCatalogJob, bool) {
 	job := q.jobs[0]
 	q.jobs[0] = aiCatalogJob{}
 	q.jobs = q.jobs[1:]
-	delete(q.queued, job.ItemID)
+	delete(q.queued, job.ItemID+":"+job.Kind)
 	return job, true
 }
 
