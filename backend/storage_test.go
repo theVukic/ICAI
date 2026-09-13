@@ -184,6 +184,122 @@ func TestChangingNameOrPriceDoesNotCompleteAnUnchangedAIDescription(t *testing.T
 	}
 }
 
+func TestBulkEditStoresRichDescriptionAsSanitizedHTML(t *testing.T) {
+	dir := t.TempDir()
+	catalogPath := filepath.Join(dir, "catalog.json")
+	item := CatalogItem{ItemID: "item-1", TechnicalDescription: "Stari opis", TechnicalDescriptionFormat: "plain"}
+	payload, err := json.Marshal(CatalogPayload{Items: []CatalogItem{item}})
+	if err != nil || os.WriteFile(catalogPath, payload, 0o644) != nil {
+		t.Fatal("failed to prepare catalog")
+	}
+
+	description := `<p><strong>✅ Karakteristike:</strong></p><ul><li><span class="ql-ui" contenteditable="false"></span><strong>Veličina felge:</strong> 16 inch</li></ul>`
+	descriptionFormat := "html"
+	store := &CatalogStore{catalogs: []UploadedCatalog{{
+		SavedPath: catalogPath,
+		Items:     []CatalogItem{item},
+	}}}
+
+	updated, err := store.UpdateItemsBulk(CatalogBulkEditRequest{
+		ItemKeys:          []string{"item-1"},
+		Description:       &description,
+		DescriptionFormat: &descriptionFormat,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated) != 1 {
+		t.Fatalf("expected one updated item, got %d", len(updated))
+	}
+
+	const expected = `<p><strong>✅ Karakteristike:</strong></p><ul><li><strong>Veličina felge:</strong> 16 inch</li></ul>`
+	if updated[0].TechnicalDescription != expected {
+		t.Fatalf("unexpected sanitized description: %q", updated[0].TechnicalDescription)
+	}
+	if updated[0].OriginalTechnicalDescription != expected || updated[0].TechnicalDescriptionFormat != "html" {
+		t.Fatalf("rich description metadata was not preserved: %#v", updated[0])
+	}
+}
+
+func TestBulkEditPreservesEnabledAIVariantAndProcessedImage(t *testing.T) {
+	dir := t.TempDir()
+	catalogPath := filepath.Join(dir, "catalog.json")
+	item := CatalogItem{
+		ItemID:                       "item-1",
+		TechnicalDescription:         "Originalni opis",
+		OriginalTechnicalDescription: "Originalni opis",
+		AITechnicalDescription:       "<p>Stari AI opis</p>",
+		TechnicalDescriptionFormat:   "plain",
+		UseAIContent:                 true,
+	}
+	payload, err := json.Marshal(CatalogPayload{Items: []CatalogItem{item}})
+	if err != nil || os.WriteFile(catalogPath, payload, 0o644) != nil {
+		t.Fatal("failed to prepare catalog")
+	}
+
+	description := `<p><strong>Novi grupni opis</strong></p>`
+	descriptionFormat := "html"
+	store := &CatalogStore{
+		catalogs:        []UploadedCatalog{{SavedPath: catalogPath, Items: []CatalogItem{item}}},
+		processedImages: map[string]string{"item-1": "processed.png"},
+	}
+
+	updated, err := store.UpdateItemsBulk(CatalogBulkEditRequest{
+		ItemKeys:          []string{"item-1"},
+		Description:       &description,
+		DescriptionFormat: &descriptionFormat,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated) != 1 || !updated[0].UseAIContent {
+		t.Fatalf("AI content toggle was not preserved: %#v", updated)
+	}
+	if updated[0].AITechnicalDescription != description {
+		t.Fatalf("AI description was not updated: %#v", updated[0])
+	}
+	if updated[0].TechnicalDescription != "Originalni opis" || updated[0].OriginalTechnicalDescription != "Originalni opis" {
+		t.Fatalf("original description was overwritten: %#v", updated[0])
+	}
+	if store.processedImages["item-1"] != "processed.png" {
+		t.Fatalf("processed image was changed: %#v", store.processedImages)
+	}
+}
+
+func TestSingleEditStoresRichDescriptionAsHTML(t *testing.T) {
+	dir := t.TempDir()
+	catalogPath := filepath.Join(dir, "catalog.json")
+	item := CatalogItem{
+		ItemID:                     "item-1",
+		NameB2B:                    "Artikal",
+		TechnicalDescription:       "Stari opis",
+		TechnicalDescriptionFormat: "plain",
+	}
+	payload, err := json.Marshal(CatalogPayload{Items: []CatalogItem{item}})
+	if err != nil || os.WriteFile(catalogPath, payload, 0o644) != nil {
+		t.Fatal("failed to prepare catalog")
+	}
+	store := &CatalogStore{catalogs: []UploadedCatalog{{
+		SavedPath: catalogPath,
+		Items:     []CatalogItem{item},
+	}}}
+
+	updated, err := store.UpdateItemByID("item-1", CatalogItemEditRequest{
+		Name:              "Artikal",
+		Description:       `<p><strong>mTechno</strong>&nbsp;opis</p>`,
+		DescriptionFormat: "html",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.TechnicalDescription != `<p><strong>mTechno</strong> opis</p>` {
+		t.Fatalf("unexpected rich description: %q", updated.TechnicalDescription)
+	}
+	if updated.OriginalTechnicalDescription != updated.TechnicalDescription || updated.TechnicalDescriptionFormat != "html" {
+		t.Fatalf("rich description metadata was not preserved: %#v", updated)
+	}
+}
+
 func TestTemplateKeepsIndexOutsideAIHTML(t *testing.T) {
 	item := CatalogItem{Index: "0949", TechnicalDescription: "<p>AI opis</p>", TechnicalDescriptionFormat: "html"}
 	if got := renderDescriptionTemplate("${technicalDescription} ${index}", item); got != "<p>AI opis</p> 0949" {
@@ -192,5 +308,26 @@ func TestTemplateKeepsIndexOutsideAIHTML(t *testing.T) {
 	item.TechnicalDescriptionFormat = "plain"
 	if got := renderDescriptionTemplate("${index}", item); got != "0949" {
 		t.Fatalf("standard template must preserve index, got %q", got)
+	}
+}
+
+func TestDescriptionToHTMLRecoversLegacyRichTextMarkedPlain(t *testing.T) {
+	item := CatalogItem{
+		TechnicalDescription:       `<p><strong>mTechno</strong></p><ul><li>Opis</li></ul>`,
+		TechnicalDescriptionFormat: "plain",
+	}
+	const expected = `<p><strong>mTechno</strong></p><ul><li>Opis</li></ul>`
+	if got := descriptionToHTML(item); got != expected {
+		t.Fatalf("legacy rich text was not recovered: %q", got)
+	}
+
+	item.TechnicalDescription = `&lt;p&gt;&lt;strong&gt;mTechno&lt;/strong&gt;&lt;/p&gt;`
+	if got := descriptionToHTML(item); got != `<p><strong>mTechno</strong></p>` {
+		t.Fatalf("escaped legacy rich text was not recovered: %q", got)
+	}
+
+	item.TechnicalDescriptionFormat = "html"
+	if got := descriptionToHTML(item); got != `<p><strong>mTechno</strong></p>` {
+		t.Fatalf("escaped rich text marked as HTML was not recovered: %q", got)
 	}
 }

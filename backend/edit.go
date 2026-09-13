@@ -154,11 +154,21 @@ func (s *CatalogStore) UpdateItemByID(itemID string, req CatalogItemEditRequest)
 
 	name := strings.TrimSpace(req.Name)
 	description := strings.TrimSpace(req.Description)
+	descriptionFormat := strings.ToLower(strings.TrimSpace(req.DescriptionFormat))
+	if descriptionFormat == "" {
+		descriptionFormat = "plain"
+	}
 	if name == "" {
 		return CatalogItem{}, fmt.Errorf("name je obavezan")
 	}
 	if req.Price < 0 {
 		return CatalogItem{}, fmt.Errorf("cijena ne može biti negativna")
+	}
+	if descriptionFormat != "plain" && descriptionFormat != "html" {
+		return CatalogItem{}, fmt.Errorf("neispravan format deskripcije")
+	}
+	if descriptionFormat == "html" {
+		description = sanitizeDescriptionHTML(description)
 	}
 
 	for catalogIndex := range s.catalogs {
@@ -183,7 +193,7 @@ func (s *CatalogStore) UpdateItemByID(itemID string, req CatalogItemEditRequest)
 				} else {
 					item.TechnicalDescription = description
 					item.OriginalTechnicalDescription = description
-					item.TechnicalDescriptionFormat = "plain"
+					item.TechnicalDescriptionFormat = descriptionFormat
 					item.UseAIContent = false
 				}
 			}
@@ -258,8 +268,18 @@ func (s *CatalogStore) UpdateItemsBulk(req CatalogBulkEditRequest) ([]CatalogIte
 		req.Name = &trimmed
 	}
 
+	descriptionFormat := "plain"
 	if req.Description != nil {
 		trimmed := strings.TrimSpace(*req.Description)
+		if req.DescriptionFormat != nil {
+			descriptionFormat = strings.ToLower(strings.TrimSpace(*req.DescriptionFormat))
+			if descriptionFormat != "plain" && descriptionFormat != "html" {
+				return nil, fmt.Errorf("neispravan format deskripcije")
+			}
+		}
+		if descriptionFormat == "html" {
+			trimmed = sanitizeDescriptionHTML(trimmed)
+		}
 		req.Description = &trimmed
 	}
 
@@ -296,10 +316,17 @@ func (s *CatalogStore) UpdateItemsBulk(req CatalogBulkEditRequest) ([]CatalogIte
 				item.RetailPrice = *req.Price
 			}
 			if req.Description != nil {
-				item.TechnicalDescription = *req.Description
-				item.OriginalTechnicalDescription = *req.Description
-				item.TechnicalDescriptionFormat = "plain"
-				item.UseAIContent = false
+				if item.UseAIContent {
+					item.AITechnicalDescription = *req.Description
+					if s.descriptionItems == nil {
+						s.descriptionItems = make(map[string]DescriptionProcessingItem)
+					}
+					s.descriptionItems[item.ItemID] = DescriptionProcessingItem{Status: "done", Source: "manual"}
+				} else {
+					item.TechnicalDescription = *req.Description
+					item.OriginalTechnicalDescription = *req.Description
+					item.TechnicalDescriptionFormat = descriptionFormat
+				}
 			}
 			if req.CurrencyCode != nil && *req.CurrencyCode != "" {
 				item.CurrencyCode = *req.CurrencyCode

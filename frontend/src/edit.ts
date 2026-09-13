@@ -139,6 +139,8 @@ function renderEditPage(root: HTMLDivElement, towKod: string): void {
   const image = displayImages[safeImageIndex]?.url ?? "";
   const priceValue =
     item && Number.isFinite(item.retailPrice) ? String(item.retailPrice) : "0";
+  const usesHtmlDescription =
+    item !== null && descriptionFormatForEdit(item) === "html";
 
   root.innerHTML = `
     <div class="shell edit-shell">
@@ -226,12 +228,12 @@ function renderEditPage(root: HTMLDivElement, towKod: string): void {
                           <input id="editPrice" name="price" type="number" min="0" step="0.01" value="${escapeHtml(priceValue)}" required />
                         </label>
 
-                        <label class="edit-field edit-field-fill">
-						  <span class="edit-label-tight">${isEditingAIDescription(item) ? "AI deskripcija" : "Deskripcija"}</span>
-						  ${descriptionFormatForEdit(item) === "html"
+                        <div class="edit-field edit-field-fill${usesHtmlDescription ? " edit-field-rich" : ""}">
+                          <span class="edit-label-tight" id="editDescriptionLabel">${isEditingAIDescription(item) ? "AI deskripcija proizvoda" : "Deskripcija proizvoda"}</span>
+                          ${usesHtmlDescription
                             ? `<div id="editDescriptionEditor" class="description-editor"></div>`
-							: `<textarea id="editDescription" name="description" rows="10">${escapeHtml(descriptionForEdit(item))}</textarea>`}
-                        </label>
+                            : `<textarea id="editDescription" name="description" rows="10" aria-labelledby="editDescriptionLabel">${escapeHtml(descriptionForEdit(item))}</textarea>`}
+                        </div>
 
                         <div class="edit-card-footer">
                           <button class="ghost-button edit-action-button edit-back-button" type="button" id="backButton">
@@ -299,7 +301,7 @@ function bindEditEvents(root: HTMLDivElement, towKod: string): void {
     }
 
     const descriptionValue = state.quill
-      ? normalizeEditorHtml(state.quill.root.innerHTML)
+      ? normalizeEditorHtml(state.quill.getSemanticHTML())
       : descriptionInput?.value || "";
 
     state.isSaving = true;
@@ -315,6 +317,7 @@ function bindEditEvents(root: HTMLDivElement, towKod: string): void {
           name: nameInput.value,
           price: Number(priceInput.value),
           description: descriptionValue,
+          descriptionFormat: state.quill ? "html" : "plain",
         }),
       });
 
@@ -354,7 +357,8 @@ function mountEditDescriptionEditor(): void {
     },
     placeholder: "Unesi deskripciju...",
   });
-	quill.clipboard.dangerouslyPasteHTML(descriptionForEdit(state.item));
+  quill.clipboard.dangerouslyPasteHTML(descriptionForEdit(state.item));
+  quill.root.setAttribute("aria-labelledby", "editDescriptionLabel");
   state.quill = quill;
 }
 
@@ -372,7 +376,7 @@ function descriptionFormatForEdit(item: CatalogItem): "plain" | "html" {
 
 function normalizeEditorHtml(value: string): string {
   const normalized = value.trim();
-  return normalized === "<p><br></p>" ? "" : normalized;
+  return normalized === "<p><br></p>" || normalized === "<p></p>" ? "" : normalized;
 }
 
 function updateEditImage(): void {

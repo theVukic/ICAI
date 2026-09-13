@@ -229,10 +229,35 @@ func templateValuesForItem(item CatalogItem) map[string]string {
 }
 
 func descriptionToHTML(item CatalogItem) string {
+	value := item.TechnicalDescription
+	decoded := unescapeHTMLText(value)
+	if strings.Contains(strings.ToLower(value), "&lt;") && containsDescriptionHTML(decoded) {
+		value = decoded
+	}
 	if item.TechnicalDescriptionFormat == "html" {
-		return sanitizeDescriptionHTML(item.TechnicalDescription)
+		return sanitizeDescriptionHTML(value)
+	}
+
+	// Older edit builds could save Quill HTML while incorrectly marking the
+	// value as plain text. Recover those descriptions at render time so existing
+	// catalog data does not publish visible <p>, <strong>, and list tags.
+	if containsDescriptionHTML(value) {
+		return sanitizeDescriptionHTML(value)
 	}
 	return plainTextToHTML(item.TechnicalDescription)
+}
+
+func containsDescriptionHTML(value string) bool {
+	for _, match := range htmlTokenPattern.FindAllStringSubmatch(value, -1) {
+		if len(match) < 3 {
+			continue
+		}
+		switch strings.ToLower(match[2]) {
+		case "h3", "p", "strong", "em", "ul", "ol", "li", "br":
+			return true
+		}
+	}
+	return false
 }
 
 func plainTextToHTML(value string) string {

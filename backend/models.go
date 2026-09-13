@@ -130,18 +130,20 @@ type ErrorResponse struct {
 }
 
 type CatalogItemEditRequest struct {
-	Name        string  `json:"name"`
-	Price       float64 `json:"price"`
-	Description string  `json:"description"`
+	Name              string  `json:"name"`
+	Price             float64 `json:"price"`
+	Description       string  `json:"description"`
+	DescriptionFormat string  `json:"descriptionFormat,omitempty"`
 }
 
 type CatalogBulkEditRequest struct {
-	ItemKeys     []string `json:"itemKeys,omitempty"`
-	TowKods      []string `json:"towKods,omitempty"`
-	Name         *string  `json:"name,omitempty"`
-	Price        *float64 `json:"price,omitempty"`
-	Description  *string  `json:"description,omitempty"`
-	CurrencyCode *string  `json:"currencyCode,omitempty"`
+	ItemKeys          []string `json:"itemKeys,omitempty"`
+	TowKods           []string `json:"towKods,omitempty"`
+	Name              *string  `json:"name,omitempty"`
+	Price             *float64 `json:"price,omitempty"`
+	Description       *string  `json:"description,omitempty"`
+	DescriptionFormat *string  `json:"descriptionFormat,omitempty"`
+	CurrencyCode      *string  `json:"currencyCode,omitempty"`
 }
 
 type CatalogBulkDeleteRequest struct {

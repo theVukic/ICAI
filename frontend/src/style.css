@@ -1674,6 +1674,8 @@ button {
     max-height: 210px;
     overflow-x: hidden;
     overflow-y: auto;
+    overflow-wrap: anywhere;
+    word-break: break-word;
     padding-right: 4px;
     color: var(--muted);
     line-height: 1.5;
@@ -1693,6 +1695,11 @@ button {
     margin: 0 0 8px;
     padding-top: 0;
     border: 0;
+}
+
+.product-description-preview p {
+    overflow: visible;
+    padding-right: 0;
 }
 
 .product-description-preview h3 {
@@ -2527,6 +2534,7 @@ button {
     grid-template-rows: auto 1fr;
     gap: 18px;
     padding: 30px;
+    min-height: 0;
     min-width: 0;
 }
 
@@ -2581,8 +2589,9 @@ button {
 }
 
 .edit-form-large {
+    min-height: 0;
     align-content: start;
-    grid-template-rows: auto auto auto auto;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
 .edit-field {
@@ -2648,8 +2657,36 @@ button {
 }
 
 .edit-field-fill {
-    min-height: 296px;
-    align-self: start;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 0;
+    align-self: stretch;
+}
+
+.edit-field-fill.edit-field-rich {
+    grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.edit-form-large .edit-field-fill > .ql-toolbar {
+    position: relative;
+    z-index: 1;
+}
+
+.edit-form-large .edit-field-fill textarea {
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+}
+
+.edit-form-large .edit-field-fill .description-editor {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.edit-form-large .edit-field-fill .description-editor .ql-editor {
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 .edit-card-footer {
@@ -3112,6 +3149,21 @@ button {
 
     .edit-hero-body {
         padding: 20px;
+    }
+
+    .edit-form-large {
+        grid-template-rows: auto;
+    }
+
+    .edit-form-large .edit-field-fill,
+    .edit-form-large .edit-field-fill .description-editor {
+        min-height: 320px;
+    }
+
+    .edit-form-large .edit-field-fill textarea {
+        height: 296px;
+        min-height: 296px;
+        max-height: 296px;
     }
 
     .edit-fixed-meta {

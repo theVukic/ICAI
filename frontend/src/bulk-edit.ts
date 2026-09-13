@@ -223,10 +223,10 @@ function renderBulkEditPage(root: HTMLDivElement): void {
                             <input id="bulkEditPrice" name="price" type="number" min="0" step="0.01" value="" placeholder="Ostavi prazno ako ne mijenjas" />
                           </label>
 
-                          <label class="edit-field edit-field-fill">
-                            <span class="edit-label-tight">Deskripcija</span>
+                          <div class="edit-field edit-field-fill edit-field-rich">
+                            <span class="edit-label-tight" id="bulkEditDescriptionLabel">Deskripcija proizvoda (globalni šablon se dodaje automatski)</span>
                             <div id="bulkEditDescriptionEditor" class="description-editor"></div>
-                          </label>
+                          </div>
 
                           ${
                             state.message
@@ -288,7 +288,7 @@ function bindBulkEditEvents(root: HTMLDivElement): void {
       return;
     }
 
-    const description = normalizeEditorHtml(state.quill.root.innerHTML);
+    const description = normalizeEditorHtml(state.quill.getSemanticHTML());
 
     const payload: Record<string, unknown> = {
       itemKeys: state.items.map((item) => getItemSelectionKey(item)),
@@ -303,6 +303,7 @@ function bindBulkEditEvents(root: HTMLDivElement): void {
     }
     if (description !== "") {
       payload.description = description;
+      payload.descriptionFormat = "html";
     }
 
     if (Object.keys(payload).length === 2) {
@@ -360,11 +361,12 @@ function mountBulkDescriptionEditor(): void {
     },
     placeholder: "Ostavi prazno ako ne mijenjaš",
   });
+  state.quill.root.setAttribute("aria-labelledby", "bulkEditDescriptionLabel");
 }
 
 function normalizeEditorHtml(value: string): string {
   const normalized = value.trim();
-  return normalized === "<p><br></p>" ? "" : normalized;
+  return normalized === "<p><br></p>" || normalized === "<p></p>" ? "" : normalized;
 }
 
 function loadStoredSelectedTowKods(): string[] {
