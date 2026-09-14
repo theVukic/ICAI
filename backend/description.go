@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -201,12 +202,21 @@ func renderDescriptionTemplate(template string, item CatalogItem) string {
 
 	replacements := templateValuesForItem(item)
 	rendered := template
+	// technicalDescription is block HTML (headings, paragraphs and lists).
+	// Quill stores a placeholder entered on its own line inside a <p>. Replace
+	// that complete wrapper first so we never publish invalid <p><h3>...</p>
+	// markup, which OLX repairs by flattening spacing and leaking formatting.
+	rendered = technicalDescriptionParagraphPattern.ReplaceAllStringFunc(rendered, func(match string) string {
+		return replacements["technicalDescription"]
+	})
 	for key, value := range replacements {
 		rendered = strings.ReplaceAll(rendered, "${"+key+"}", value)
 	}
 
 	return rendered
 }
+
+var technicalDescriptionParagraphPattern = regexp.MustCompile(`(?is)<p(?:\s[^>]*)?>\s*\$\{technicalDescription\}\s*</p>`)
 
 func templateValuesForItem(item CatalogItem) map[string]string {
 	priceText := "Na upit"

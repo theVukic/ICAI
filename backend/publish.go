@@ -23,6 +23,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -479,7 +480,7 @@ func (a *App) buildListingPayload(
 		ShortDescription: buildShortDescription(item),
 		Description:      description,
 		Price:            item.RetailPrice,
-		Available:        true,
+		Available:        false,
 		ListingType:      "sell",
 		State:            "new",
 		CategoryID:       strconv.Itoa(categoryID),
@@ -614,10 +615,93 @@ func buildShortDescription(item CatalogItem) string {
 
 func buildListingDescription(item CatalogItem, renderedDescription string) string {
 	if strings.TrimSpace(renderedDescription) != "" {
-		return strings.TrimSpace(renderedDescription)
+		return makeDescriptionOLXCompatible(renderedDescription)
 	}
 
-	return strings.TrimSpace(item.TechnicalDescription)
+	return makeDescriptionOLXCompatible(item.TechnicalDescription)
+}
+
+type olxDescriptionList struct {
+	ordered bool
+	next    int
+}
+
+var emptyDescriptionParagraphPattern = regexp.MustCompile(`(?is)<p(?:\s[^>]*)?>\s*(?:<br\s*/?>)?\s*</p>`)
+
+// makeDescriptionOLXCompatible replaces HTML list markers with real text
+// markers. Quill renders bullets with its own CSS (and stores bullet lists as
+// <ol><li data-list="bullet">), while OLX sanitizes that CSS/metadata. Unicode
+// markers and explicit line breaks survive OLX's HTML cleanup and therefore
+// keep the published description close to the editor preview.
+func makeDescriptionOLXCompatible(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || !containsDescriptionHTML(value) {
+		return value
+	}
+	// OLX removes empty paragraphs. Explicit breaks preserve the blank lines
+	// the user created in the editor.
+	value = emptyDescriptionParagraphPattern.ReplaceAllString(value, "<br>")
+
+	var output strings.Builder
+	position := 0
+	lists := make([]olxDescriptionList, 0, 2)
+	for _, indexes := range htmlTokenPattern.FindAllStringSubmatchIndex(value, -1) {
+		if indexes[0] > position {
+			output.WriteString(value[position:indexes[0]])
+		}
+
+		token := value[indexes[0]:indexes[1]]
+		closing := indexes[2] >= 0 && value[indexes[2]:indexes[3]] == "/"
+		tag := strings.ToLower(value[indexes[4]:indexes[5]])
+		switch tag {
+		case "ul":
+			if !closing {
+				lists = append(lists, olxDescriptionList{})
+			} else if len(lists) > 0 {
+				lists = lists[:len(lists)-1]
+			}
+		case "ol":
+			if !closing {
+				lists = append(lists, olxDescriptionList{ordered: true, next: 1})
+			} else if len(lists) > 0 {
+				lists = lists[:len(lists)-1]
+			}
+		case "li":
+			if closing {
+				output.WriteString("</p>")
+				break
+			}
+
+			output.WriteString("<p>")
+
+			lowerToken := strings.ToLower(token)
+			isBullet := strings.Contains(lowerToken, `data-list="bullet"`)
+			isOrdered := strings.Contains(lowerToken, `data-list="ordered"`)
+			if len(lists) > 0 && (lists[len(lists)-1].ordered || isOrdered) && !isBullet {
+				current := &lists[len(lists)-1]
+				if current.next == 0 {
+					current.next = 1
+				}
+				output.WriteString(strconv.Itoa(current.next))
+				output.WriteString(". ")
+				current.next++
+			} else {
+				output.WriteString("• ")
+			}
+		case "span":
+			// Span styling is editor-specific and OLX removes it. Dropping both
+			// the opening and closing tag also removes Quill's empty ql-ui marker
+			// without affecting the text contained by ordinary spans.
+		default:
+			output.WriteString(token)
+		}
+		position = indexes[1]
+	}
+	if position < len(value) {
+		output.WriteString(value[position:])
+	}
+
+	return strings.Trim(output.String(), " \t\r\n")
 }
 
 func buildPublishSummaryMessage(published int, skipped int, failed int, usedSelection bool) string {

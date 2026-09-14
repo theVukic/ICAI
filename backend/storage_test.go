@@ -311,6 +311,14 @@ func TestTemplateKeepsIndexOutsideAIHTML(t *testing.T) {
 	}
 }
 
+func TestTemplateUnwrapsBlockDescriptionPlaceholderParagraph(t *testing.T) {
+	item := CatalogItem{TechnicalDescription: `<h3>Naslov</h3><p>Opis</p>`, TechnicalDescriptionFormat: "html"}
+	want := `<p>Prije</p><h3>Naslov</h3><p>Opis</p><p>Poslije</p>`
+	if got := renderDescriptionTemplate(`<p>Prije</p><p>${technicalDescription}</p><p>Poslije</p>`, item); got != want {
+		t.Fatalf("block description remained nested in paragraph: %q", got)
+	}
+}
+
 func TestDescriptionToHTMLRecoversLegacyRichTextMarkedPlain(t *testing.T) {
 	item := CatalogItem{
 		TechnicalDescription:       `<p><strong>mTechno</strong></p><ul><li>Opis</li></ul>`,

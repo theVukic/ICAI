@@ -31,6 +31,11 @@ const (
 	descriptionModelSize     = int64(2497280256)
 )
 
+var (
+	errInvalidDescriptionJSON       = errors.New("AI odgovor nije validan JSON opis")
+	errDescriptionSchemaUnsupported = errors.New("lokalni AI ne podržava strogu JSON šemu")
+)
+
 type descriptionEvidence struct {
 	ID   string `json:"id"`
 	URL  string `json:"url,omitempty"`
@@ -287,6 +292,45 @@ func (p *DescriptionProcessor) serverHealthy(ctx context.Context, baseURL string
 }
 
 func (p *DescriptionProcessor) requestDescription(ctx context.Context, baseURL string, item CatalogItem, evidence []descriptionEvidence) (generatedDescription, error) {
+	generated, err := p.requestDescriptionAttempt(ctx, baseURL, item, evidence, descriptionJSONSchema(), 0.2)
+	if err == nil {
+		return generated, nil
+	}
+	if !errors.Is(err, errInvalidDescriptionJSON) && !errors.Is(err, errDescriptionSchemaUnsupported) {
+		return generatedDescription{}, err
+	}
+
+	firstErr := err
+	generated, err = p.requestDescriptionAttempt(
+		ctx,
+		baseURL,
+		item,
+		evidence,
+		map[string]string{"type": "json_object"},
+		0.1,
+	)
+	if err == nil {
+		logEvent("ai-description", "description JSON recovered on retry", map[string]any{
+			"item_id": item.ItemID,
+		})
+		return generated, nil
+	}
+	if !errors.Is(err, errInvalidDescriptionJSON) {
+		return generatedDescription{}, err
+	}
+
+	// A malformed model response must never prevent description processing.
+	// The catalog text is already trusted evidence, so it is a safe final
+	// fallback when both structured-generation attempts fail.
+	logEvent("ai-description", "invalid model JSON replaced with catalog fallback", map[string]any{
+		"item_id":     item.ItemID,
+		"first_error": firstErr.Error(),
+		"retry_error": err.Error(),
+	})
+	return fallbackGeneratedDescription(item, evidence), nil
+}
+
+func (p *DescriptionProcessor) requestDescriptionAttempt(ctx context.Context, baseURL string, item CatalogItem, evidence []descriptionEvidence, responseFormat any, temperature float64) (generatedDescription, error) {
 	evidenceJSON, _ := json.Marshal(evidence)
 	prompt := fmt.Sprintf(`/no_think
 Napiši prodajnu deskripciju proizvoda na srpskoj latinici, ijekavica. Engleske riječi koristi samo za brend ili termin bez prirodnog prevoda.
@@ -305,9 +349,9 @@ Vrati isključivo JSON oblika:
 
 	payload := map[string]any{
 		"model":           "local",
-		"temperature":     0.25,
+		"temperature":     temperature,
 		"max_tokens":      1400,
-		"response_format": map[string]string{"type": "json_object"},
+		"response_format": responseFormat,
 		"messages":        []map[string]string{{"role": "user", "content": prompt}},
 	}
 	body, _ := json.Marshal(payload)
@@ -326,6 +370,9 @@ Vrati isključivo JSON oblika:
 		return generatedDescription{}, err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		if format, ok := responseFormat.(map[string]any); ok && format["type"] == "json_schema" {
+			return generatedDescription{}, fmt.Errorf("%w: status %d", errDescriptionSchemaUnsupported, response.StatusCode)
+		}
 		return generatedDescription{}, fmt.Errorf("lokalni AI je vratio status %d", response.StatusCode)
 	}
 	var result struct {
@@ -335,15 +382,71 @@ Vrati isključivo JSON oblika:
 			} `json:"message"`
 		} `json:"choices"`
 	}
-	if err := json.Unmarshal(responseBody, &result); err != nil || len(result.Choices) == 0 {
-		return generatedDescription{}, errors.New("lokalni AI odgovor nije validan")
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		return generatedDescription{}, fmt.Errorf("%w: neispravna struktura odgovora", errInvalidDescriptionJSON)
+	}
+	if len(result.Choices) == 0 {
+		return generatedDescription{}, fmt.Errorf("%w: odgovor nema generisani sadržaj", errInvalidDescriptionJSON)
 	}
 	content := strings.TrimSpace(result.Choices[0].Message.Content)
 	generated, err := decodeGeneratedDescription(content)
 	if err != nil {
-		return generatedDescription{}, fmt.Errorf("lokalni AI nije vratio očekivani JSON: %w", err)
+		return generatedDescription{}, fmt.Errorf("%w: %v", errInvalidDescriptionJSON, err)
 	}
 	return generated, nil
+}
+
+func descriptionJSONSchema() map[string]any {
+	claimSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"text":     map[string]string{"type": "string"},
+			"evidence": map[string]any{"type": "array", "items": map[string]string{"type": "string"}},
+		},
+		"required":             []string{"text", "evidence"},
+		"additionalProperties": false,
+	}
+	claimList := func() map[string]any {
+		return map[string]any{"type": "array", "items": claimSchema}
+	}
+	return map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   "product_description",
+			"strict": true,
+			"schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"title":      map[string]string{"type": "string"},
+					"intro":      map[string]any{"type": "array", "items": map[string]string{"type": "string"}},
+					"features":   claimList(),
+					"dimensions": claimList(),
+					"notes":      claimList(),
+				},
+				"required":             []string{"title", "intro", "features", "dimensions", "notes"},
+				"additionalProperties": false,
+			},
+		},
+	}
+}
+
+func fallbackGeneratedDescription(item CatalogItem, evidence []descriptionEvidence) generatedDescription {
+	original := ""
+	for _, source := range evidence {
+		if source.ID == "catalog" {
+			original = source.Text
+			break
+		}
+	}
+	original = htmlToText(original, 8000)
+	claims := []generatedDescriptionClaim{}
+	if original != "" {
+		claims = append(claims, generatedDescriptionClaim{Text: original, Evidence: []string{"catalog"}})
+	}
+	return generatedDescription{
+		Title:    firstNonEmpty(item.NameB2B, item.TowKod, "Proizvod"),
+		Features: claims,
+	}
 }
 
 // decodeGeneratedDescription accepts the JSON object even when a local model

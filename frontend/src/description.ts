@@ -263,7 +263,7 @@ function mountQuillEditor(): void {
   }
 
   quill.on("text-change", () => {
-    state.editorHtml = normalizeEditorHtml(quill.root.innerHTML);
+    state.editorHtml = normalizeEditorHtml(quill.getSemanticHTML());
   });
 
   state.quill = quill;
@@ -274,7 +274,7 @@ function getEditorHtml(): string {
     return normalizeEditorHtml(state.editorHtml);
   }
 
-  return normalizeEditorHtml(state.quill.root.innerHTML);
+  return normalizeEditorHtml(state.quill.getSemanticHTML());
 }
 
 function normalizeEditorHtml(value: string): string {
