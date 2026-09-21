@@ -4,6 +4,7 @@ import { renderSessionBadge } from "./session";
 import { renderAppBrand } from "./branding";
 import Quill from "quill";
 import "quill/dist/quill.snow.css";
+import { bindTitleAutocomplete } from "./title-autocomplete";
 
 const SELECTED_TOWKODS_STORAGE_KEY = "asiapp:selected-towkods";
 
@@ -207,7 +208,7 @@ function renderBulkEditPage(root: HTMLDivElement): void {
                     ? `<div class="edit-state">Ucitavam formu...</div>`
                     : hasItems
                       ? `
-                        <form class="edit-form edit-form-large" id="bulkEditForm">
+                        <form class="edit-form edit-form-large" id="bulkEditForm" autocomplete="off">
                           <div class="bulk-form-intro">
                             <p class="edit-eyebrow">GRUPNA PROMJENA</p>
                             <p class="edit-subtitle">Popuni samo polja koja zelis promijeniti. Prazna polja ostaju neizmijenjena.</p>
@@ -215,7 +216,10 @@ function renderBulkEditPage(root: HTMLDivElement): void {
 
                           <label class="edit-field">
                             <span class="edit-label-tight">Ime</span>
-                            <input id="bulkEditName" name="name" type="text" value="" placeholder="Ostavi prazno ako ne mijenjas" />
+                            <div class="title-autocomplete">
+                              <input id="bulkEditName" name="asi-bulk-title-editor" type="text" value="" placeholder="Ostavi prazno ako ne mijenjas" autocomplete="off" data-form-type="other" />
+                              <div class="title-suggestions" id="bulkEditNameSuggestions" role="listbox" hidden></div>
+                            </div>
                           </label>
 
                           <label class="edit-field">
@@ -267,6 +271,7 @@ function renderBulkEditPage(root: HTMLDivElement): void {
   `;
 
   bindBulkEditEvents(root);
+  bindTitleAutocomplete(document.querySelector<HTMLInputElement>("#bulkEditName"));
   mountBulkDescriptionEditor();
 }
 

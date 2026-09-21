@@ -49,6 +49,7 @@ func (a *App) handleCatalogItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.decorateCatalogItem(&item)
+		a.rememberTitle(item.NameB2B)
 
 		logEvent("catalog", "single item updated", map[string]any{
 			"price":   item.RetailPrice,
@@ -76,6 +77,9 @@ func (a *App) handleCatalogBulkEdit(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if req.Name != nil {
+		a.rememberTitle(*req.Name)
 	}
 
 	logEvent("catalog", "bulk edit completed", map[string]any{

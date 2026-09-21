@@ -36,6 +36,7 @@ type App struct {
 	runtimeURLPath       string
 	baseURL              string
 	descriptionDir       string
+	titleHistory         *TitleHistoryStore
 	olxCategories        *OLXCategoryService
 	auth                 *AuthManager
 	publishQueue         chan queuedPublishRequest
@@ -104,6 +105,7 @@ func NewApp() (*App, error) {
 			filepath.Join(projectDir, "description"),
 			filepath.Join(exeDir, "description"),
 		}),
+		titleHistory: NewTitleHistoryStore(filepath.Join(storagePaths.RootDir, "title-history.json")),
 		olxCategories: NewOLXCategoryService([]string{
 			storagePaths.BackendDir,
 			storagePaths.RootDir,
@@ -441,6 +443,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 
 	protectedAPI.HandleFunc("/api/catalog/bulk-delete", a.handleCatalogBulkDelete)
 	protectedAPI.HandleFunc("/api/catalog/bulk-edit", a.handleCatalogBulkEdit)
+	protectedAPI.HandleFunc("/api/title-suggestions", a.handleTitleSuggestions)
 	protectedAPI.HandleFunc("/api/catalog/export", a.handleCatalogExport)
 	protectedAPI.HandleFunc("/api/catalog/publish", a.handleCatalogPublish)
 	protectedAPI.HandleFunc("/api/catalog/item/", a.handleCatalogItem)

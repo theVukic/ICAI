@@ -1,4 +1,4 @@
-#define AppVersion "0.0.20"
+#define AppVersion "0.0.22"
 #define OutputDir "C:\Users\Vukic\Desktop\kirby\AS app\release\out"
 #define StageDir "C:\Users\Vukic\Desktop\kirby\AS app\app"
 #define ExtrasDir "C:\Users\Vukic\Desktop\kirby\AS app\release\out\extras"

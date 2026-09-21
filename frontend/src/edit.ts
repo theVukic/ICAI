@@ -4,6 +4,7 @@ import { renderSessionBadge } from "./session";
 import { renderAppBrand } from "./branding";
 import Quill from "quill";
 import "quill/dist/quill.snow.css";
+import { bindTitleAutocomplete } from "./title-autocomplete";
 
 const backIcon = `
   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -217,10 +218,13 @@ function renderEditPage(root: HTMLDivElement, towKod: string): void {
                   ? `<div class="edit-state">Ucitavam podatke...</div>`
                   : item
                     ? `
-                      <form class="edit-form edit-form-large" id="editForm">
+                      <form class="edit-form edit-form-large" id="editForm" autocomplete="off">
                         <label class="edit-field">
                           <span class="edit-label-tight">Ime</span>
-                          <input id="editName" name="name" type="text" value="${escapeHtml(item.nameB2B || "")}" required />
+                          <div class="title-autocomplete">
+                            <input id="editName" name="asi-title-editor" type="text" value="${escapeHtml(item.nameB2B || "")}" autocomplete="off" data-form-type="other" required />
+                            <div class="title-suggestions" id="editNameSuggestions" role="listbox" hidden></div>
+                          </div>
                         </label>
 
                         <label class="edit-field">
@@ -257,6 +261,7 @@ function renderEditPage(root: HTMLDivElement, towKod: string): void {
   `;
 
   bindEditEvents(root, towKod);
+  bindTitleAutocomplete(document.querySelector<HTMLInputElement>("#editName"));
   mountEditDescriptionEditor();
 }
 
