@@ -152,15 +152,44 @@ func (s *CatalogStore) ClearImageProcessingStatus(itemID string) {
 	}
 }
 
-func (s *CatalogStore) SetProcessedImage(itemID, imagePath string) {
-	s.SetProcessedImageWithModel(itemID, imagePath, "")
+func (s *CatalogStore) SetProcessedImage(itemID, imagePath string) error {
+	return s.SetProcessedImageWithModel(itemID, imagePath, "")
 }
 
-func (s *CatalogStore) SetProcessedImageWithModel(itemID, imagePath, model string) {
+func (s *CatalogStore) SetProcessedImageWithModel(itemID, imagePath, model string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.processedImages[itemID] = imagePath
-	s.processingItems[itemID] = ImageProcessingItem{Status: "done", Model: model}
+	for catalogIndex := range s.catalogs {
+		catalog := &s.catalogs[catalogIndex]
+		for itemIndex := range catalog.Items {
+			item := &catalog.Items[itemIndex]
+			if item.ItemID != itemID {
+				continue
+			}
+			images := make([]CatalogImage, 0, len(item.Images)+1)
+			images = append(images, CatalogImage{
+				ID:       generateID(),
+				Path:     imagePath,
+				Source:   "ai",
+				Checksum: fileChecksum(imagePath),
+			})
+			for _, image := range item.Images {
+				if image.Source != "ai" {
+					images = append(images, image)
+				}
+			}
+			previousImages := item.Images
+			item.Images = normalizeCatalogImages(images)
+			if err := s.writeCatalogFile(*catalog); err != nil {
+				item.Images = previousImages
+				return fmt.Errorf("AI slika nije sačuvana u galeriju: %w", err)
+			}
+			s.processedImages[itemID] = imagePath
+			s.processingItems[itemID] = ImageProcessingItem{Status: "done", Model: model}
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s", errCatalogItemNotFound, itemID)
 }
 
 func (s *CatalogStore) ProcessedImage(itemID string) (string, ImageProcessingItem) {
@@ -447,12 +476,22 @@ func (s *CatalogStore) AddCatalog(file multipart.File, header *multipart.FileHea
 		item.ItemID = generateID()
 		item.SourceCatalogID = catalogID
 		item.SourceFileName = header.Filename
+		item.Images = normalizeCatalogImages(item.Images)
 		items = append(items, item)
 		if processedCover == "" {
+			for _, image := range item.Images {
+				if image.Source == "ai" && strings.TrimSpace(image.Path) != "" {
+					restoredCovers[item.ItemID] = image.Path
+					break
+				}
+			}
 			continue
 		}
 		if info, statErr := os.Stat(processedCover); statErr == nil && !info.IsDir() && info.Size() > 0 {
 			items[len(items)-1].UseAIContent = true
+			items[len(items)-1].Images = normalizeCatalogImages(append([]CatalogImage{{
+				ID: generateID(), Path: processedCover, Source: "ai", Checksum: fileChecksum(processedCover),
+			}}, items[len(items)-1].Images...))
 			restoredCovers[item.ItemID] = processedCover
 		} else {
 			logEvent("image-processing", "saved ZIP cover unavailable", map[string]any{"tow_kod": item.TowKod, "path": processedCover})
@@ -681,7 +720,7 @@ func (s *CatalogStore) WriteExportZIP(w io.Writer, itemKeys []string, towKods []
 			itemSlug = "artikal"
 		}
 
-		if generatedPath, progress := s.processedImages[item.ItemID], s.processingItems[item.ItemID]; progress.Status == "done" && strings.TrimSpace(generatedPath) != "" {
+		if generatedPath, progress := s.processedImages[item.ItemID], s.processingItems[item.ItemID]; progress.Status == "done" && strings.TrimSpace(generatedPath) != "" && !containsImageSource(item.Images, "ai") {
 			coverEntryName := uniqueZIPEntryName(
 				fmt.Sprintf("processed/%s/cover.png", itemSlug),
 				usedEntryNames,

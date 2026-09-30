@@ -20,10 +20,16 @@ import {
 import { mountPageTransition, navigateWithFade } from "./transition";
 import { renderAppBrand } from "./branding";
 import { installGlobalClientLogging, logClientEvent } from "./logger";
+import {
+  openImageManager,
+  pickAndUploadBulkImages,
+} from "./image-manager";
 
 type CatalogImage = {
+  id: string;
   position: number;
   url: string;
+  source?: string;
 };
 
 type CatalogStatus = {
@@ -254,6 +260,7 @@ const state: {
   listingLimitLoading: boolean;
   shouldRestoreMainScroll: boolean;
   refreshSuspendUntil: number;
+  bulkOptionsOpen: boolean;
 } = {
   data: {
     catalogs: [],
@@ -303,6 +310,7 @@ const state: {
   listingLimitLoading: false,
   shouldRestoreMainScroll: false,
   refreshSuspendUntil: 0,
+  bulkOptionsOpen: false,
 };
 
 const plusIcon = `
@@ -411,6 +419,7 @@ const categorizeIcon = `
 `;
 const aiImageIcon = `<svg fill="#F3F6FB" viewBox="144 144 512 512" aria-hidden="true"><path d="M226.77 179.58c-25.895 0-47.172 21.398-47.172 47.293v346.34c0 25.895 21.277 47.203 47.172 47.203h346.34c25.895 0 47.293-21.309 47.293-47.203l-.003906-346.34c0-25.895-21.398-47.293-47.293-47.293zm0 31.488h346.34c8.9961 0 15.805 6.8125 15.805 15.805l-.003906 218.3-68.695-57.195c-8-5.793-13.934-5.4961-20.57.33594l-53.074 47.172-107.07-94.465c-6.8086-6.0781-14.117-5.4609-20.449-.37109l-107.96 88.93v-202.7c0-8.9961 6.6875-15.805 15.684-15.805zm275.55 31.488c-30.246 0-55.074 24.859-55.074 55.105s24.828 55.074 55.074 55.074 55.105-24.828 55.105-55.074c0-30.246-24.859-55.105-55.105-55.105zm0 31.52c13.23 0 23.617 10.355 23.617 23.586 0 13.23-10.387 23.586-23.617 23.586-13.23 0-23.707-10.355-23.707-23.586 0-13.23 10.48-23.586 23.707-23.586zM328.8 373.428l244.12 215.46H226.77c-8.9961 0-15.684-6.6875-15.684-15.684v-102.89zm181.67 47.418 78.445 65.344v74.906l-118.54-104.61z"/></svg>`;
 const aiDescriptionIcon = `<svg fill="#F3F6FB" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 7H3V4A1 1 0 0 1 4 3H20a1 1 0 0 1 1 1zM3 20V9H21V20a1 1 0 0 1-1 1H4A1 1 0 0 1 3 20zm3-6H18V12H6zm0 4h6V16H6z"/></svg>`;
+const moreIcon = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`;
 
 const editSelectedIcon = `
   <svg xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" width="24" height="24">
@@ -592,7 +601,7 @@ function render(): void {
         ? state.selectionPulseTowKods.includes(selectionKey)
         : false;
       const processing = state.data.aiProcessing.items[item.itemId];
-		const displayImages = displayImagesForItem(item, processing);
+		const displayImages = displayImagesForItem(item);
       const currentImageIndex = Math.min(
         state.imageIndexes[imageKey] ?? 0,
         Math.max(displayImages.length - 1, 0),
@@ -612,6 +621,14 @@ function render(): void {
                 ? `<div class="selection-badge">ODABRANO</div>`
                 : ""
             }
+            <div class="card-image-menu-shell">
+              <button class="card-image-menu-trigger" type="button" data-image-menu-trigger="${escapeHtml(item.itemId)}" aria-label="Opcije slika" aria-expanded="false">${moreIcon}</button>
+              <div class="card-image-menu" data-image-menu="${escapeHtml(item.itemId)}" hidden>
+                <button type="button" data-image-action="append" data-image-item="${escapeHtml(item.itemId)}">Dodaj sliku</button>
+                <button type="button" data-image-action="cover" data-image-item="${escapeHtml(item.itemId)}">Dodaj naslovnu sliku</button>
+                <button type="button" data-image-action="edit" data-image-item="${escapeHtml(item.itemId)}">Promijeni redoslijed slika</button>
+              </div>
+            </div>
             ${
               image
                 ? `<img src="${image}" alt="${escapeHtml(item.nameB2B)}" loading="lazy" draggable="false" />`
@@ -683,13 +700,17 @@ function render(): void {
           state.selectionToolsVisible
             ? `
               <div class="selection-tools ${state.selectionToolsAnimation}">
-                <div class="toolbar-action">
-				  <button class="header-icon-button selected-action-button ai-selected-image-button" id="processSelectedImageButton" type="button" aria-label="Obradi slike selektovanih artikala"><span class="button-icon">${aiImageIcon}</span></button>
-				  <span class="action-label action-label-toggle">AI SLIKA</span>
-				</div>
-				<div class="toolbar-action">
-				  <button class="header-icon-button selected-action-button ai-selected-description-button" id="processSelectedDescriptionButton" type="button" aria-label="Obradi opise selektovanih artikala"><span class="button-icon">${aiDescriptionIcon}</span></button>
-				  <span class="action-label action-label-toggle">AI OPIS</span>
+				<div class="toolbar-action bulk-options-shell">
+				  <button class="header-icon-button selected-action-button bulk-options-button" id="bulkOptionsButton" type="button" aria-label="Opcije za selektovane artikle" aria-expanded="${state.bulkOptionsOpen}"><span class="button-icon">${moreIcon}</span></button>
+				  <span class="action-label action-label-toggle">OPCIJE</span>
+                  <div class="bulk-options-menu" id="bulkOptionsMenu" ${state.bulkOptionsOpen ? "" : "hidden"}>
+                    <button type="button" data-bulk-option="ai-image"><span>${aiImageIcon}</span>AI slike</button>
+                    <button type="button" data-bulk-option="ai-description"><span>${aiDescriptionIcon}</span>AI opis</button>
+                    <div class="bulk-options-divider"></div>
+                    <strong>SLIKE</strong>
+                    <button type="button" data-bulk-option="cover">Postavi naslovnu sliku</button>
+                    <button type="button" data-bulk-option="append">Dodaj obične slike</button>
+                  </div>
 				</div>
 				<div class="toolbar-action">
                   <button class="header-icon-button selected-action-button category-selected-button" id="categorySelectedButton" type="button" aria-label="Kategorija za selektovane artikle">
@@ -943,8 +964,11 @@ function bindEvents(): void {
     document.querySelector<HTMLButtonElement>("#editSelectedButton");
   const deleteSelectedButton =
     document.querySelector<HTMLButtonElement>("#deleteSelectedButton");
-	const processSelectedImageButton = document.querySelector<HTMLButtonElement>("#processSelectedImageButton");
-	const processSelectedDescriptionButton = document.querySelector<HTMLButtonElement>("#processSelectedDescriptionButton");
+  const bulkOptionsButton = document.querySelector<HTMLButtonElement>("#bulkOptionsButton");
+  const bulkOptionsMenu = document.querySelector<HTMLElement>("#bulkOptionsMenu");
+  const bulkOptionButtons = document.querySelectorAll<HTMLButtonElement>("[data-bulk-option]");
+  const imageMenuTriggers = document.querySelectorAll<HTMLButtonElement>("[data-image-menu-trigger]");
+  const imageActionButtons = document.querySelectorAll<HTMLButtonElement>("[data-image-action]");
   const selectableCards =
     document.querySelectorAll<HTMLElement>("[data-select-card]");
   const sortMenu = document.querySelector<HTMLElement>("#sortMenu");
@@ -984,8 +1008,85 @@ function bindEvents(): void {
     await forceLogoutToLogin();
   });
 
-	processSelectedImageButton?.addEventListener("click", () => void requestAIProcess(state.selectedTowKods, "image"));
-	processSelectedDescriptionButton?.addEventListener("click", () => void requestAIProcess(state.selectedTowKods, "description"));
+	bulkOptionsButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    state.bulkOptionsOpen = !state.bulkOptionsOpen;
+    render();
+  });
+  bulkOptionsMenu?.addEventListener("click", (event) => event.stopPropagation());
+  for (const button of bulkOptionButtons) {
+    button.addEventListener("click", async () => {
+      const option = button.dataset.bulkOption;
+      state.bulkOptionsOpen = false;
+      if (state.selectedTowKods.length === 0) {
+        state.message = "Odaberi barem jedan artikal.";
+        state.messageTone = "danger";
+        render();
+        return;
+      }
+      if (option === "ai-image" || option === "ai-description") {
+        await requestAIProcess(state.selectedTowKods, option === "ai-image" ? "image" : "description");
+        return;
+      }
+      if (option !== "append" && option !== "cover") return;
+      if (bulkOptionsMenu) bulkOptionsMenu.hidden = true;
+      try {
+        const result = await pickAndUploadBulkImages<CatalogState>(state.selectedTowKods, option);
+        if (!result) {
+          render();
+          return;
+        }
+        state.data = result.state;
+        state.imageIndexes = {};
+        state.message = option === "cover"
+          ? "Naslovna slika je postavljena selektovanim artiklima."
+          : "Slike su dodane selektovanim artiklima.";
+        if (result.skipped > 0) state.message += ` Preskočeno duplikata: ${result.skipped}.`;
+        state.messageTone = "success";
+      } catch (error) {
+        state.message = error instanceof Error ? error.message : "Slike nisu dodane.";
+        state.messageTone = "danger";
+      }
+      render();
+    });
+  }
+	for (const trigger of imageMenuTriggers) {
+    trigger.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const itemID = trigger.dataset.imageMenuTrigger || "";
+      const menu = Array.from(document.querySelectorAll<HTMLElement>("[data-image-menu]")).find((candidate) => candidate.dataset.imageMenu === itemID);
+      const willOpen = Boolean(menu?.hidden);
+      document.querySelectorAll<HTMLElement>("[data-image-menu]").forEach((candidate) => { candidate.hidden = true; });
+      if (menu) menu.hidden = !willOpen;
+      for (const candidate of imageMenuTriggers) {
+        candidate.setAttribute("aria-expanded", String(candidate === trigger && willOpen));
+      }
+      if (willOpen) {
+        window.setTimeout(() => {
+          document.addEventListener("click", () => {
+            document.querySelectorAll<HTMLElement>("[data-image-menu]").forEach((candidate) => { candidate.hidden = true; });
+            document.querySelectorAll<HTMLButtonElement>("[data-image-menu-trigger]").forEach((candidate) => candidate.setAttribute("aria-expanded", "false"));
+          }, { once: true });
+        }, 0);
+      }
+    });
+  }
+  for (const button of imageActionButtons) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const item = state.data.items.find((candidate) => candidate.itemId === button.dataset.imageItem);
+      if (!item) return;
+      document.querySelectorAll<HTMLElement>("[data-image-menu]").forEach((candidate) => { candidate.hidden = true; });
+      openImageManager(item, (updated) => {
+        const index = state.data.items.findIndex((candidate) => candidate.itemId === updated.itemId);
+        if (index >= 0) state.data.items[index] = updated as CatalogItem;
+        state.imageIndexes[updated.itemId] = 0;
+        state.message = "Galerija slika je sačuvana.";
+        state.messageTone = "success";
+        render();
+      }, (button.dataset.imageAction as "edit" | "append" | "cover") || "edit");
+    });
+  }
 	for (const button of aiProcessButtons) button.addEventListener("click", () => {
 		const itemID = button.dataset.aiItemId; const kind = button.dataset.aiProcess as "image" | "description";
 		if (itemID && (kind === "image" || kind === "description")) void requestAIProcess([itemID], kind);
@@ -1485,7 +1586,7 @@ function bindEvents(): void {
 
       const item = state.data.items.find((entry) => entry.itemId === imageKey);
       const displayImages = item
-        ? displayImagesForItem(item, state.data.aiProcessing.items[item.itemId])
+        ? displayImagesForItem(item)
         : [];
 
       if (!item || displayImages.length < 2) {
@@ -2027,15 +2128,12 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-function displayImagesForItem(item: CatalogItem, processing?: AIProcessingItem): CatalogImage[] {
-	if (item.useAIContent && processing?.image.status === "done" && item.processedImageUrl) {
-    return [{ position: -1, url: item.processedImageUrl }, ...item.images];
-  }
-  return item.images;
+function displayImagesForItem(item: CatalogItem): CatalogImage[] {
+	return [...item.images].sort((left, right) => left.position - right.position);
 }
 
 function hasAIContent(item: CatalogItem, processing?: AIProcessingItem): boolean {
-	return Boolean(item.aiTechnicalDescription?.trim()) || Boolean(processing?.image.status === "done" && item.processedImageUrl);
+	return Boolean(item.aiTechnicalDescription?.trim()) || item.images.some((image) => image.source === "ai") || Boolean(processing?.image.status === "done" && item.processedImageUrl);
 }
 
 function renderAIProgressCounters(): string {

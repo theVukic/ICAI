@@ -203,6 +203,17 @@ func (a *App) decorateCatalogItem(item *CatalogItem) {
 		}
 		item.ProcessedImageURL = "/api/catalog/processed-image?itemId=" + url.QueryEscape(item.ItemID) + "&v=" + version
 	}
+	for index := range item.Images {
+		image := &item.Images[index]
+		if strings.TrimSpace(image.Path) == "" || strings.TrimSpace(image.ID) == "" || !managedCatalogImagePath(image.Path, a.store.TempDir()) {
+			continue
+		}
+		version := "0"
+		if info, err := os.Stat(image.Path); err == nil {
+			version = strconv.FormatInt(info.ModTime().UnixNano(), 10)
+		}
+		image.URL = "/api/catalog/image?itemId=" + url.QueryEscape(item.ItemID) + "&imageId=" + url.QueryEscape(image.ID) + "&v=" + version
+	}
 }
 
 func (a *App) currentAIGeneration() (uint64, bool, context.Context) {
@@ -277,10 +288,11 @@ func (a *App) processAIQueue() {
 			_, imageProgress := a.store.ProcessedImage(item.ItemID)
 			if imageProgress.Status != "done" {
 				a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "processing"})
-				if len(item.Images) == 0 {
-					a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: "artikal nema sliku"})
+				sourceImage, hasSource := supplierAIInputImage(item.Images)
+				if !hasSource {
+					a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: "artikal nema izvornu dobavljačku sliku"})
 				} else {
-					result, model, imageErr := a.imageProcessor.Compose(item.ItemID, item.Images[0], func(selectedModel string) {
+					result, model, imageErr := a.imageProcessor.Compose(item.ItemID, sourceImage, func(selectedModel string) {
 						a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "processing", Model: selectedModel})
 					})
 					if !a.isCurrentAIJob(job) {
@@ -296,7 +308,15 @@ func (a *App) processAIQueue() {
 							"error":   imageErr.Error(),
 						})
 					} else {
-						a.store.SetProcessedImageWithModel(item.ItemID, result, model)
+						latestItem, latestErr := a.store.GetItemByID(item.ItemID)
+						latestSource, sourceStillExists := supplierAIInputImage(latestItem.Images)
+						if latestErr != nil || !sourceStillExists || latestSource.ID != sourceImage.ID {
+							a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: "izvorna dobavljačka slika je promijenjena tokom AI obrade", Model: model})
+							_ = os.Remove(result)
+						} else if persistErr := a.store.SetProcessedImageWithModel(item.ItemID, result, model); persistErr != nil {
+							a.store.SetImageProcessingStatus(item.ItemID, ImageProcessingItem{Status: "error", Error: persistErr.Error(), Model: model})
+							_ = os.Remove(result)
+						}
 					}
 				}
 			}
@@ -325,6 +345,15 @@ func (a *App) processAIQueue() {
 			}
 		}
 	}
+}
+
+func supplierAIInputImage(images []CatalogImage) (CatalogImage, bool) {
+	for _, image := range images {
+		if image.Source == "supplier" && image.AIInput {
+			return image, true
+		}
+	}
+	return CatalogImage{}, false
 }
 
 func (a *App) processPublishQueue() {
@@ -438,6 +467,9 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 		a.handleCatalogUpload(w, r)
 	})
 	protectedAPI.HandleFunc("/api/catalog/processed-image", a.handleProcessedCatalogImage)
+	protectedAPI.HandleFunc("/api/catalog/image", a.handleCatalogImage)
+	protectedAPI.HandleFunc("/api/catalog/images/save", a.handleCatalogImagesSave)
+	protectedAPI.HandleFunc("/api/catalog/images/bulk", a.handleCatalogImagesBulk)
 	protectedAPI.HandleFunc("/api/ai-processing/run", a.handleAIProcess)
 	protectedAPI.HandleFunc("/api/ai-processing/content", a.handleAIContentToggle)
 

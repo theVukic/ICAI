@@ -20,7 +20,7 @@ func TestProcessedImageCacheReusesOnlyMatchingSourceImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	item := CatalogItem{ItemID: "first-import", TowKod: "ABC-1", Images: []CatalogImage{{Path: source}}}
+	item := CatalogItem{ItemID: "first-import", TowKod: "ABC-1", Images: []CatalogImage{{ID: "supplier", Source: "supplier", AIInput: true, Path: source}}}
 	if err := cache.Save(item, processed); err != nil {
 		t.Fatal(err)
 	}

@@ -55,6 +55,10 @@ type CatalogImage struct {
 	Position int    `json:"position"`
 	URL      string `json:"url"`
 	Path     string `json:"path,omitempty"`
+	ID       string `json:"id,omitempty"`
+	Source   string `json:"source,omitempty"`
+	Checksum string `json:"checksum,omitempty"`
+	AIInput  bool   `json:"aiInput,omitempty"`
 }
 
 type CatalogStatus struct {

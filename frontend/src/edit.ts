@@ -5,6 +5,7 @@ import { renderAppBrand } from "./branding";
 import Quill from "quill";
 import "quill/dist/quill.snow.css";
 import { bindTitleAutocomplete } from "./title-autocomplete";
+import { openImageManager } from "./image-manager";
 
 const backIcon = `
   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -25,8 +26,10 @@ const saveIcon = `
 `;
 
 type CatalogImage = {
+  id: string;
   position: number;
   url: string;
+  source?: string;
 };
 
 type CatalogStatus = {
@@ -41,7 +44,6 @@ type CatalogItem = {
   nameB2B: string;
   brandName: string;
   images: CatalogImage[];
-	processedImageUrl?: string;
   technicalDescription: string;
 	aiTechnicalDescription?: string;
 	useAIContent?: boolean;
@@ -131,9 +133,7 @@ async function loadEditItem(root: HTMLDivElement, towKod: string): Promise<void>
 
 function renderEditPage(root: HTMLDivElement, towKod: string): void {
   const item = state.item;
-  const displayImages = item?.processedImageUrl
-    ? [{ position: -1, url: item.processedImageUrl }, ...item.images]
-    : item?.images ?? [];
+  const displayImages = item ? [...item.images].sort((left, right) => left.position - right.position) : [];
   const imageCount = displayImages.length;
   const safeImageIndex =
     imageCount > 0 ? Math.min(state.activeImageIndex, imageCount - 1) : 0;
@@ -162,6 +162,16 @@ function renderEditPage(root: HTMLDivElement, towKod: string): void {
         <section class="edit-card-shell">
           <article class="edit-hero-card">
             <div class="edit-hero-media">
+              ${item ? `<div class="card-image-menu-shell edit-image-menu-shell">
+                <button class="card-image-menu-trigger" id="editImageMenuTrigger" type="button" aria-label="Opcije slika">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+                </button>
+                <div class="card-image-menu" id="editImageMenu" hidden>
+                  <button type="button" data-edit-image-action="append">Dodaj sliku</button>
+                  <button type="button" data-edit-image-action="cover">Dodaj naslovnu sliku</button>
+                  <button type="button" data-edit-image-action="edit">Uredi slike i redoslijed</button>
+                </div>
+              </div>` : ""}
               ${
                 image
                   ? `<img id="editImage" src="${image}" alt="${escapeHtml(item?.nameB2B || towKod)}" loading="lazy" draggable="false" />`
@@ -270,16 +280,46 @@ function bindEditEvents(root: HTMLDivElement, towKod: string): void {
   const editForm = document.querySelector<HTMLFormElement>("#editForm");
   const imageButtons =
     document.querySelectorAll<HTMLButtonElement>("[data-edit-image-nav]");
+  const imageMenuTrigger = document.querySelector<HTMLButtonElement>("#editImageMenuTrigger");
+  const imageMenu = document.querySelector<HTMLElement>("#editImageMenu");
+  const imageActionButtons = document.querySelectorAll<HTMLButtonElement>("[data-edit-image-action]");
 
   backButton?.addEventListener("click", () => {
     navigateWithFade(root, "/");
   });
 
+  imageMenuTrigger?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (imageMenu) imageMenu.hidden = !imageMenu.hidden;
+  });
+  imageMenu?.addEventListener("click", (event) => event.stopPropagation());
+  for (const button of imageActionButtons) {
+    button.addEventListener("click", () => {
+      if (!state.item) return;
+      const draftName = document.querySelector<HTMLInputElement>("#editName")?.value ?? state.item.nameB2B;
+      const draftPrice = document.querySelector<HTMLInputElement>("#editPrice")?.value ?? String(state.item.retailPrice);
+      const draftDescription = state.quill
+        ? normalizeEditorHtml(state.quill.getSemanticHTML())
+        : document.querySelector<HTMLTextAreaElement>("#editDescription")?.value ?? state.item.technicalDescription;
+      if (imageMenu) imageMenu.hidden = true;
+      openImageManager(state.item, (updated) => {
+        state.item = updated as CatalogItem;
+        state.activeImageIndex = 0;
+        renderEditPage(root, towKod);
+        const nameInput = document.querySelector<HTMLInputElement>("#editName");
+        const priceInput = document.querySelector<HTMLInputElement>("#editPrice");
+        const descriptionInput = document.querySelector<HTMLTextAreaElement>("#editDescription");
+        if (nameInput) nameInput.value = draftName;
+        if (priceInput) priceInput.value = draftPrice;
+        if (state.quill) state.quill.clipboard.dangerouslyPasteHTML(draftDescription);
+        else if (descriptionInput) descriptionInput.value = draftDescription;
+      }, (button.dataset.editImageAction as "edit" | "append" | "cover") || "edit");
+    });
+  }
+
   for (const button of imageButtons) {
     button.addEventListener("click", () => {
-      const displayImages = state.item?.processedImageUrl
-        ? [{ position: -1, url: state.item.processedImageUrl }, ...state.item.images]
-        : state.item?.images ?? [];
+      const displayImages = state.item ? [...state.item.images].sort((left, right) => left.position - right.position) : [];
       if (!state.item || displayImages.length < 2) {
         return;
       }
@@ -385,9 +425,7 @@ function normalizeEditorHtml(value: string): string {
 }
 
 function updateEditImage(): void {
-	const displayImages = state.item?.processedImageUrl
-		? [{ position: -1, url: state.item.processedImageUrl }, ...state.item.images]
-		: state.item?.images ?? [];
+	const displayImages = state.item ? [...state.item.images].sort((left, right) => left.position - right.position) : [];
 	if (!state.item || displayImages.length === 0) {
 		return;
 	}

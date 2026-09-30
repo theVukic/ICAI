@@ -254,15 +254,6 @@ func (a *App) publishCatalogItems(ctx context.Context, items []CatalogItem) (Cat
 			})
 			continue
 		}
-		if item.UseAIContent {
-			generatedPath, progress := a.store.ProcessedImage(item.ItemID)
-			if progress.Status == "done" && strings.TrimSpace(generatedPath) != "" {
-				// Position -1 guarantees the generated cover is uploaded first while
-				// retaining the imported first image as the second OLX image.
-				item.Images = append([]CatalogImage{{Position: -1, Path: generatedPath}}, item.Images...)
-			}
-		}
-
 		publishableJobs = append(publishableJobs, publishJob{
 			index: len(publishableJobs),
 			item:  item,
@@ -541,17 +532,7 @@ func (c *categoryAttributesCache) Get(
 }
 
 func (a *App) uploadListingImages(ctx context.Context, listingID int, images []CatalogImage) (int, error) {
-	sortedImages := make([]CatalogImage, 0, len(images))
-	for _, image := range images {
-		if strings.TrimSpace(image.URL) == "" && strings.TrimSpace(image.Path) == "" {
-			continue
-		}
-		sortedImages = append(sortedImages, image)
-	}
-
-	sort.SliceStable(sortedImages, func(left int, right int) bool {
-		return sortedImages[left].Position < sortedImages[right].Position
-	})
+	sortedImages := orderedCatalogImages(images)
 
 	if len(sortedImages) == 0 {
 		return 0, nil
@@ -569,6 +550,21 @@ func (a *App) uploadListingImages(ctx context.Context, listingID int, images []C
 	}
 
 	return uploadedImages[0].ID, nil
+}
+
+func orderedCatalogImages(images []CatalogImage) []CatalogImage {
+	sortedImages := make([]CatalogImage, 0, len(images))
+	for _, image := range images {
+		if strings.TrimSpace(image.URL) == "" && strings.TrimSpace(image.Path) == "" {
+			continue
+		}
+		sortedImages = append(sortedImages, image)
+	}
+
+	sort.SliceStable(sortedImages, func(left int, right int) bool {
+		return sortedImages[left].Position < sortedImages[right].Position
+	})
+	return sortedImages
 }
 
 func extractImageURLs(images []CatalogImage) []string {
@@ -927,7 +923,7 @@ func (s *OLXCategoryService) SetListingMainImage(ctx context.Context, listingID 
 	}
 
 	log.Printf("[OLX] main image POST failed listingID=%d imageID=%d error=%v", listingID, imageID, postErr)
-	return fmt.Errorf("postavljanje glavne slike nije uspelo: put=%v; post=%v", putErr, postErr)
+	return fmt.Errorf("postavljanje naslovne slike nije uspelo: put=%v; post=%v", putErr, postErr)
 }
 
 func (s *OLXCategoryService) PublishListing(ctx context.Context, listingID int) error {

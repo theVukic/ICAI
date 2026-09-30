@@ -83,10 +83,10 @@ func (c *ProcessedImageCache) Save(item CatalogItem, processedPath string) error
 }
 
 func processedImageCacheKey(item CatalogItem) (string, error) {
-	if len(item.Images) == 0 {
+	first, ok := supplierAIInputImage(item.Images)
+	if !ok {
 		return "", fmt.Errorf("artikal nema izvornu sliku za cache")
 	}
-	first := item.Images[0]
 	hash := sha256.New()
 	_, _ = io.WriteString(hash, processedImagePipelineVersion+"\n")
 	_, _ = io.WriteString(hash, strings.TrimSpace(item.TowKod)+"\n")
